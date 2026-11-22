@@ -1,0 +1,84 @@
+{
+  "routerMap": [
+    {
+      "name": "NativeLoginPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/NativeLoginPage.ets",
+      "buildFunction": "NativeLoginPageBuilder"
+    },
+    {
+      "name": "WeComScanPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/WeComScanPage.ets",
+      "buildFunction": "WeComScanPageBuilder"
+    },
+    {
+      "name": "EmptyClassroomPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/EmptyClassroomPage.ets",
+      "buildFunction": "EmptyClassroomPageBuilder"
+    },
+    {
+      "name": "CampusCardPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/CampusCardPage.ets",
+      "buildFunction": "CampusCardPageBuilder"
+    },
+    {
+      "name": "LibraryBookingPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/LibraryBookingPage.ets",
+      "buildFunction": "LibraryBookingPageBuilder"
+    },
+    {
+      "name": "CampusMapPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/CampusMapPage.ets",
+      "buildFunction": "CampusMapPageBuilder"
+    },
+    {
+      "name": "AnnouncementsPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/AnnouncementsPage.ets",
+      "buildFunction": "AnnouncementsPageBuilder"
+    },
+    {
+      "name": "OtpTokenPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/OtpTokenPage.ets",
+      "buildFunction": "OtpTokenPageBuilder"
+    },
+    {
+      "name": "ScheduleEditorPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/ScheduleEditorPage.ets",
+      "buildFunction": "ScheduleEditorPageBuilder"
+    },
+    {
+      "name": "ScheduleCollectionPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/ScheduleCollectionPage.ets",
+      "buildFunction": "ScheduleCollectionPageBuilder"
+    },
+    {
+      "name": "ScheduleSharePage",
+      "pageSourceFile": "src/main/ets/pages/subpages/ScheduleSharePage.ets",
+      "buildFunction": "ScheduleSharePageBuilder"
+    },
+    {
+      "name": "HomeLayoutPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/HomeLayoutPage.ets",
+      "buildFunction": "HomeLayoutPageBuilder"
+    },
+    {
+      "name": "RateDetailPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/RateDetailPage.ets",
+      "buildFunction": "RateDetailPageBuilder"
+    },
+    {
+      "name": "RatePublishPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/RatePublishPage.ets",
+      "buildFunction": "RatePublishPageBuilder"
+    },
+    {
+      "name": "SettingsPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/SettingsPage.ets",
+      "buildFunction": "SettingsPageBuilder"
+    },
+    {
+      "name": "ContributorsPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/ContributorsPage.ets",
+      "buildFunction": "ContributorsPageBuilder"
+    }
+  ]
+}

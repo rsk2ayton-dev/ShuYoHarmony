@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "专为 SHUer 设计的校园一站式服务原生鸿蒙应用"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "SHU友"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "SHU友"
+    }
+  ]
+}
