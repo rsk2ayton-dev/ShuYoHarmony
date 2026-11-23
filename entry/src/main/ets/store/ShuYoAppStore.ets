@@ -18,11 +18,20 @@ import {
 import { AcademicProgressService } from '../services/AcademicProgressService';
 import { AnnouncementService } from '../services/AnnouncementService';
 import { CampusCardService } from '../services/CampusCardService';
+import { CourseRecordingService } from '../services/CourseRecordingService';
 import { CourseReviewService } from '../services/CourseReviewService';
 import { ShuYoCookieJar } from '../services/HttpClientService';
 import { PreferencesService } from '../services/PreferencesService';
 import { ScheduleService } from '../services/ScheduleService';
 import { JsonHelpers } from '../services/JsonHelpers';
+
+interface ShuYoCardCachePayload {
+  studentId: string;
+  cardInfo: ShuYoCampusCardInfo;
+  bills: ShuYoCampusCardBill[];
+  updatedAt: string;
+  rangeDays: number;
+}
 
 @ObservedV2
 export class ShuYoAppStore {
@@ -36,6 +45,7 @@ export class ShuYoAppStore {
   private static readonly keyHomeLayout: string = 'shuyo_home_layout_v1';
   private static readonly keyCollections: string = 'shuyo_schedule_collections_v1';
   private static readonly keyBookings: string = 'shuyo_library_bookings_v1';
+  private static readonly keyCampusCardCache: string = 'shuyo_campus_card_cache_v1';
 
   @Trace isInitialized: boolean = false;
   @Trace hasCompletedOnboarding: boolean = false;
@@ -56,8 +66,13 @@ export class ShuYoAppStore {
   @Trace scheduleData: ShuYoScheduleData = ScheduleService.emptySchedule();
   @Trace progressSummary: ShuYoProgressSummary = AcademicProgressService.loadDemoProgress();
   @Trace announcements: ShuYoAnnouncementItem[] = [];
-  @Trace cardInfo: ShuYoCampusCardInfo = CampusCardService.loadDemoCardInfo();
+  @Trace cardInfo: ShuYoCampusCardInfo = CampusCardService.emptyCardInfo();
   @Trace cardBills: ShuYoCampusCardBill[] = [];
+  @Trace isSyncingCampusCard: boolean = false;
+  @Trace campusCardError: string = '';
+  @Trace campusCardAuthRequired: boolean = false;
+  @Trace campusCardUpdatedAt: string = '';
+  @Trace campusCardRangeDays: number = 90;
   @Trace homeLayout: ShuYoHomeLayoutItem[] = [];
   @Trace rateHome: ShuYoRateHomeData = {
     recent: [],
@@ -119,6 +134,9 @@ export class ShuYoAppStore {
       this.studentName = this.scheduleData.term.studentName;
     }
     this.isInitialized = true;
+    if (this.isLoggedIn && !this.isDemoMode) {
+      this.syncCampusCard();
+    }
   }
 
   enterDemoMode(systemChoice?: ShuYoCampusSystem): void {
@@ -133,6 +151,9 @@ export class ShuYoAppStore {
     this.hasCompletedOnboarding = true;
     this.activeTabIndex = 0;
     this.currentWeek = 1;
+    this.campusCardError = '';
+    this.campusCardAuthRequired = false;
+    this.campusCardUpdatedAt = '演示数据';
 
     PreferencesService.setBoolean(ShuYoAppStore.keyInitialized, true);
     PreferencesService.setBoolean(ShuYoAppStore.keyDemoMode, true);
@@ -161,6 +182,16 @@ export class ShuYoAppStore {
     this.scheduleData = ScheduleService.emptySchedule(studentId);
     PreferencesService.remove(ShuYoAppStore.keyCollections);
 
+    CampusCardService.clearSession();
+    CourseRecordingService.clearSession();
+    PreferencesService.remove(ShuYoAppStore.keyCampusCardCache);
+    this.cardInfo = CampusCardService.emptyCardInfo(studentId);
+    this.cardBills = [];
+    this.campusCardError = '';
+    this.campusCardAuthRequired = false;
+    this.campusCardUpdatedAt = '';
+    this.campusCardRangeDays = 90;
+
     PreferencesService.setBoolean(ShuYoAppStore.keyInitialized, true);
     PreferencesService.setBoolean(ShuYoAppStore.keyDemoMode, false);
     PreferencesService.setString(ShuYoAppStore.keyStudentId, studentId);
@@ -175,6 +206,8 @@ export class ShuYoAppStore {
 
   logout(): void {
     ShuYoCookieJar.clearAll();
+    CampusCardService.clearSession();
+    CourseRecordingService.clearSession();
     this.isLoggedIn = false;
     this.isDemoMode = false;
     this.studentId = '';
@@ -186,10 +219,17 @@ export class ShuYoAppStore {
     this.scheduleCollections = [];
     this.activeCollectionId = 'col-primary';
     this.scheduleData = ScheduleService.emptySchedule('');
+    this.cardInfo = CampusCardService.emptyCardInfo('');
+    this.cardBills = [];
+    this.isSyncingCampusCard = false;
+    this.campusCardError = '';
+    this.campusCardAuthRequired = false;
+    this.campusCardUpdatedAt = '';
     PreferencesService.setBoolean(ShuYoAppStore.keyInitialized, false);
     PreferencesService.setBoolean(ShuYoAppStore.keyDemoMode, false);
     PreferencesService.remove(ShuYoAppStore.keyStudentId);
     PreferencesService.remove(ShuYoAppStore.keyCollections);
+    PreferencesService.remove(ShuYoAppStore.keyCampusCardCache);
     this.dataRevision++;
   }
 
@@ -248,17 +288,26 @@ export class ShuYoAppStore {
       this.progressSummary = AcademicProgressService.loadDemoProgress();
       this.cardInfo = CampusCardService.loadDemoCardInfo();
       this.cardBills = CampusCardService.loadDemoBills();
+      this.campusCardUpdatedAt = '演示数据';
+      this.campusCardError = '';
+      this.campusCardAuthRequired = false;
       this.rateHome = CourseReviewService.buildDemoHome(this.scheduleData);
       return;
     }
     this.announcements = [];
-    this.cardBills = [];
+    this.loadCampusCardCache();
   }
 
   async refreshSecondaryLiveData(): Promise<void> {
     if (this.isDemoMode) {
       return;
     }
+    try {
+      await this.syncCampusCard();
+    } catch (_cardErr) {
+      // Handled inside syncCampusCard
+    }
+
     try {
       const liveAnnouncements = await AnnouncementService.fetchLiveAnnouncements('学校主页');
       if (liveAnnouncements.length > 0) {
@@ -284,6 +333,56 @@ export class ShuYoAppStore {
       } catch (_progErr) {
         // Keep non-blocking
       }
+    }
+  }
+
+  async syncCampusCard(rangeDays?: number): Promise<string> {
+    if (rangeDays !== undefined && rangeDays > 0) {
+      this.campusCardRangeDays = rangeDays;
+    }
+    if (this.isDemoMode) {
+      this.cardInfo = CampusCardService.loadDemoCardInfo();
+      this.cardBills = CampusCardService.loadDemoBills();
+      this.campusCardError = '';
+      this.campusCardAuthRequired = false;
+      this.campusCardUpdatedAt = '演示数据';
+      this.dataRevision++;
+      return '演示校园卡已刷新';
+    }
+    if (this.isSyncingCampusCard) {
+      return '正在同步校园卡...';
+    }
+    if (!this.isLoggedIn || this.studentId.length === 0) {
+      this.campusCardAuthRequired = true;
+      this.campusCardError = '请先登录上海大学统一身份认证账号';
+      return this.campusCardError;
+    }
+
+    this.isSyncingCampusCard = true;
+    this.campusCardError = '';
+    this.campusCardAuthRequired = false;
+    try {
+      const res = await CampusCardService.fetchLiveCardAndBills(this.studentId, this.campusCardRangeDays);
+      this.cardInfo = res.cardInfo;
+      this.cardBills = res.bills;
+      this.campusCardError = '';
+      this.campusCardAuthRequired = false;
+      const now = new Date();
+      const hh = now.getHours() < 10 ? `0${now.getHours()}` : `${now.getHours()}`;
+      const mm = now.getMinutes() < 10 ? `0${now.getMinutes()}` : `${now.getMinutes()}`;
+      this.campusCardUpdatedAt = `${hh}:${mm}`;
+      this.persistCampusCardCache();
+      this.dataRevision++;
+      return `校园卡同步成功，余额 ¥${res.cardInfo.balance.toFixed(2)}`;
+    } catch (err) {
+      const e = err as Error;
+      const rawMsg = e.message.length > 0 ? e.message : '校园卡查询失败，请稍后重试';
+      this.campusCardAuthRequired = CampusCardService.isAuthRequiredError(rawMsg);
+      const cleanMsg = CampusCardService.stripErrorPrefix(rawMsg);
+      this.campusCardError = cleanMsg;
+      return cleanMsg;
+    } finally {
+      this.isSyncingCampusCard = false;
     }
   }
 
@@ -552,6 +651,92 @@ export class ShuYoAppStore {
     this.scheduleData = ScheduleService.emptySchedule(this.studentId);
   }
 
+  private loadCampusCardCache(): void {
+    if (this.isDemoMode || !this.isLoggedIn || this.studentId.length === 0) {
+      this.cardInfo = CampusCardService.emptyCardInfo(this.studentId);
+      this.cardBills = [];
+      this.campusCardUpdatedAt = '';
+      return;
+    }
+    const raw = PreferencesService.getString(ShuYoAppStore.keyCampusCardCache, '');
+    if (raw.length === 0) {
+      this.cardInfo = CampusCardService.emptyCardInfo(this.studentId);
+      this.cardBills = [];
+      this.campusCardUpdatedAt = '';
+      return;
+    }
+    const obj = JsonHelpers.parseObject(raw);
+    if (obj === undefined) {
+      this.cardInfo = CampusCardService.emptyCardInfo(this.studentId);
+      this.cardBills = [];
+      this.campusCardUpdatedAt = '';
+      return;
+    }
+    const savedId = JsonHelpers.str(obj, 'studentId').trim();
+    if (savedId !== this.studentId || savedId === 'DEMO0001') {
+      this.cardInfo = CampusCardService.emptyCardInfo(this.studentId);
+      this.cardBills = [];
+      this.campusCardUpdatedAt = '';
+      return;
+    }
+    const cObj = JsonHelpers.asObject(obj['cardInfo']);
+    const balance = JsonHelpers.num(cObj, 'balance', Number.NaN);
+    const cardStu = JsonHelpers.str(cObj, 'studentId').trim();
+    if (cObj === undefined || cardStu !== this.studentId || !Number.isFinite(balance)) {
+      this.cardInfo = CampusCardService.emptyCardInfo(this.studentId);
+      this.cardBills = [];
+      this.campusCardUpdatedAt = '';
+      return;
+    }
+    this.cardInfo = {
+      studentId: cardStu,
+      holderName: JsonHelpers.str(cObj, 'holderName', cardStu),
+      cardStatus: JsonHelpers.str(cObj, 'cardStatus', '正常'),
+      balance: balance,
+      validUntil: JsonHelpers.str(cObj, 'validUntil', ''),
+      isLoaded: true
+    };
+    const rawBills = JsonHelpers.asArray(obj['bills']);
+    const parsedBills: ShuYoCampusCardBill[] = [];
+    for (let i = 0; i < rawBills.length; i++) {
+      const bObj = JsonHelpers.asObject(rawBills[i]);
+      if (bObj === undefined) {
+        continue;
+      }
+      const merchant = JsonHelpers.str(bObj, 'merchantName').trim();
+      const payTime = JsonHelpers.str(bObj, 'payTime').trim();
+      const amount = JsonHelpers.num(bObj, 'amount', Number.NaN);
+      if (merchant.length > 0 && payTime.length > 0 && Number.isFinite(amount)) {
+        parsedBills.push({
+          id: JsonHelpers.str(bObj, 'id', `cached-bill-${i}`),
+          merchantName: merchant,
+          payTime: payTime,
+          amount: amount
+        });
+      }
+    }
+    this.cardBills = parsedBills;
+    this.campusCardUpdatedAt = JsonHelpers.str(obj, 'updatedAt', '');
+    const savedRange = JsonHelpers.num(obj, 'rangeDays', 90);
+    if (savedRange > 0) {
+      this.campusCardRangeDays = savedRange;
+    }
+  }
+
+  private persistCampusCardCache(): void {
+    if (this.isDemoMode || !this.cardInfo.isLoaded || this.studentId.length === 0) {
+      return;
+    }
+    const payload: ShuYoCardCachePayload = {
+      studentId: this.studentId,
+      cardInfo: this.cardInfo,
+      bills: this.cardBills,
+      updatedAt: this.campusCardUpdatedAt,
+      rangeDays: this.campusCardRangeDays
+    };
+    PreferencesService.setString(ShuYoAppStore.keyCampusCardCache, JSON.stringify(payload));
+  }
+
   private persistCollections(): void {
     PreferencesService.setString(ShuYoAppStore.keyCollections, JSON.stringify(this.scheduleCollections));
   }
@@ -629,7 +814,7 @@ export class ShuYoAppStore {
       { id: ShuYoHomeModuleId.TODAY_COURSE, title: '今日课程', subtitle: '查看当日课程与上课时间', enabled: true },
       { id: ShuYoHomeModuleId.CAMPUS_CARD, title: '校园卡', subtitle: '余额展示与消费记录', enabled: true },
       { id: ShuYoHomeModuleId.ANNOUNCEMENTS, title: '通知公告', subtitle: '学校与教务重要通知', enabled: true },
-      { id: ShuYoHomeModuleId.CAMPUS_TOOLS, title: '校园服务', subtitle: '空教室 / 图书馆 / 校园地图 / 动态口令', enabled: true }
+      { id: ShuYoHomeModuleId.CAMPUS_TOOLS, title: '校园服务', subtitle: '课程录播 / 空教室 / 图书馆 / 校园地图 / 动态口令', enabled: true }
     ];
   }
 }

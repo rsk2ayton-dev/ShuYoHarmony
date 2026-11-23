@@ -9,6 +9,7 @@ import {
   ShuYoLoginPageParam
 } from '../../models/ShuYoModels';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
+import { CampusCardService } from '../../services/CampusCardService';
 import { ShuYoSectionHeader } from '../../components/ShuYoCommonViews';
 
 interface ShuYoToolEntry {
@@ -23,6 +24,7 @@ export struct HomeDashboardView {
   @Param navStack: NavPathStack = new NavPathStack();
   private store: ShuYoAppStore = ShuYoAppStore.instance();
   private readonly toolEntries: ShuYoToolEntry[] = [
+    { routeName: 'CourseRecordingsPage', label: '课程录播', subtitle: '课堂回放与直播', symbolKind: 'video' },
     { routeName: 'EmptyClassroomPage', label: '空教室', subtitle: '自习室查询', symbolKind: 'building' },
     { routeName: 'LibraryBookingPage', label: '图书馆预约', subtitle: '座位与规则', symbolKind: 'doc' },
     { routeName: 'CampusMapPage', label: '校园地图', subtitle: '三校区导航', symbolKind: 'map' },
@@ -59,14 +61,45 @@ export struct HomeDashboardView {
   }
 
   private getMonthSpendText(): string {
-    let total = 0;
-    for (let i = 0; i < this.store.cardBills.length; i++) {
-      const b = this.store.cardBills[i];
-      if (b.amount > 0) {
-        total += b.amount;
-      }
-    }
+    const total = CampusCardService.computeRecentSpend(this.store.cardBills, 30);
     return `¥${total.toFixed(2)}`;
+  }
+
+  private getCardBalanceText(): string {
+    if (this.store.cardInfo.isLoaded) {
+      return `¥${this.store.cardInfo.balance.toFixed(2)}`;
+    }
+    if (this.store.isSyncingCampusCard) {
+      return '同步中...';
+    }
+    return '暂未同步';
+  }
+
+  private getCardSubText(): string {
+    if (this.store.cardInfo.isLoaded) {
+      return `近30天累计消费 ${this.getMonthSpendText()}`;
+    }
+    if (this.store.isSyncingCampusCard) {
+      return '正在查询校内一卡通余额与账单';
+    }
+    if (this.store.campusCardError.length > 0) {
+      return this.store.campusCardError;
+    }
+    return '点击进入校园卡页面查询真实余额与账单';
+  }
+
+  private getCardBadgeText(): string {
+    if (this.store.cardInfo.isLoaded) {
+      return this.store.cardInfo.cardStatus;
+    }
+    return this.store.isSyncingCampusCard ? '同步中' : '未同步';
+  }
+
+  private getCardBadgeColor(): string {
+    if (this.store.cardInfo.isLoaded) {
+      return this.store.colors.success;
+    }
+    return this.store.colors.textTertiary;
   }
 
   private getEnabledModules(): ShuYoHomeLayoutItem[] {
@@ -86,7 +119,11 @@ export struct HomeDashboardView {
 
   @Builder
   private renderToolIcon(kind: string) {
-    if (kind === 'building') {
+    if (kind === 'video') {
+      SymbolGlyph($r('sys.symbol.play_circle'))
+        .fontSize(22)
+        .fontColor([this.store.colors.accent])
+    } else if (kind === 'building') {
       SymbolGlyph($r('sys.symbol.building'))
         .fontSize(22)
         .fontColor([this.store.colors.accent])
@@ -196,22 +233,24 @@ export struct HomeDashboardView {
             .fontWeight(FontWeight.Medium)
             .fontColor(this.store.colors.textSecondary)
         }
-        Text(`¥${this.store.cardInfo.balance.toFixed(2)}`)
+        Text(this.getCardBalanceText())
           .fontSize(26)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.store.colors.textPrimary)
-        Text(`近30天累计消费 ${this.getMonthSpendText()}`)
+        Text(this.getCardSubText())
           .fontSize(12)
           .fontColor(this.store.colors.textTertiary)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
       Column({ space: 4 }) {
-        Text(this.store.cardInfo.cardStatus)
+        Text(this.getCardBadgeText())
           .fontSize(12)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.store.colors.success)
+          .fontColor(this.getCardBadgeColor())
           .padding({ left: 10, right: 10, top: 4, bottom: 4 })
           .borderRadius(10)
           .backgroundColor(this.store.colors.surfaceAlt)
@@ -320,7 +359,7 @@ export struct HomeDashboardView {
       .columnsGap(10)
       .rowsGap(10)
       .width('100%')
-      .height(178)
+      .height(272)
     }
     .width('100%')
     .padding(16)

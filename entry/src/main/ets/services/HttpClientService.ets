@@ -465,7 +465,9 @@ export class HttpClientService {
       }
     }
     const reqHeaders = headerMap as rcp.RequestHeaders;
-    const reqContent: string | undefined = body !== undefined && body.length > 0 ? body : undefined;
+    const reqContent: string | undefined = body !== undefined
+      ? body
+      : (method === http.RequestMethod.POST ? '' : undefined);
     const req = new rcp.Request(targetUrl, HttpClientService.toRcpMethod(method), reqHeaders, reqContent);
 
     try {

@@ -51,6 +51,21 @@ export class ShuYoConstants {
   static readonly eportalHost: string = 'eportal.shu.edu.cn';
   static readonly eportalBaseUrl: string = 'https://eportal.shu.edu.cn';
 
+  static readonly vodDirectHost: string = 'vod.cc.shu.edu.cn';
+  static readonly vodDirectBase: string = 'https://vod.cc.shu.edu.cn';
+  static readonly vodWebVpnHost: string = 'https-vod-cc-shu-edu-cn-443.webvpn.shu.edu.cn';
+  static readonly vodWebVpnBase: string = 'https://https-vod-cc-shu-edu-cn-443.webvpn.shu.edu.cn';
+  static readonly vodCasHost: string = 'vrm.cc.shu.edu.cn';
+  static readonly vodCasWebVpnHost: string = 'https-vrm-cc-shu-edu-cn-443.webvpn.shu.edu.cn';
+  static readonly vodMediaHost: string = 'vrmvod.cc.shu.edu.cn';
+  static readonly vodMediaPort: number = 40443;
+  static readonly vodMediaWebVpnHost: string = 'https-vrmvod-cc-shu-edu-cn-40443.webvpn.shu.edu.cn';
+  static readonly vodLiveHost: string = 'rtc.cc.shu.edu.cn';
+  static readonly vodLivePort: number = 32001;
+  static readonly vodLiveWebVpnHost: string = 'https-rtc-cc-shu-edu-cn-32001.webvpn.shu.edu.cn';
+  static readonly vodApiPath: string = '/jy-application-resourcemanage';
+  static readonly vodUiPath: string = '/jy-application-resourcemanage-ui';
+
   static readonly thereBaseUrl: string = 'https://there.shu.edu.cn';
   static readonly clientBackendBaseUrl: string = 'https://api.shuyo.work';
 
@@ -76,6 +91,15 @@ export class ShuYoConstants {
     clientName: 'WebVPN 访问控制系统',
     scope: '',
     redirectUri: 'https://webvpn.shu.edu.cn/callback/oauth2',
+    generateState: false
+  };
+
+  static readonly targetCampusCard: ShuYoWeComOAuthTarget = {
+    kind: 'campusCard',
+    clientId: 'WUHWfrntnWYHZfzQ5QvXUCVy',
+    clientName: '校园卡查询',
+    scope: '1',
+    redirectUri: 'https://eportal.shu.edu.cn/login',
     generateState: false
   };
 

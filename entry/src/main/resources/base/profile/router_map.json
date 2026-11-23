@@ -79,6 +79,16 @@
       "name": "ContributorsPage",
       "pageSourceFile": "src/main/ets/pages/subpages/ContributorsPage.ets",
       "buildFunction": "ContributorsPageBuilder"
+    },
+    {
+      "name": "CourseRecordingsPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/CourseRecordingsPage.ets",
+      "buildFunction": "CourseRecordingsPageBuilder"
+    },
+    {
+      "name": "CourseRecordingPlayerPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/CourseRecordingPlayerPage.ets",
+      "buildFunction": "CourseRecordingPlayerPageBuilder"
     }
   ]
 }

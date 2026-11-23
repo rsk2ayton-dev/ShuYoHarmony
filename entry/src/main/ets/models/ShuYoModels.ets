@@ -161,6 +161,8 @@ export interface ShuYoCampusCardInfo {
   holderName: string;
   cardStatus: string;
   balance: number;
+  validUntil: string;
+  isLoaded: boolean;
 }
 
 export interface ShuYoCampusCardBill {
@@ -371,4 +373,91 @@ export interface ShuYoLoginPageParam {
 
 export interface ShuYoEmptyParam {
   tag: string;
+}
+
+export interface ShuYoVodTerm {
+  id: number;
+  name: string;
+  academicYear: string;
+  termNumber: number;
+  isCurrent: boolean;
+  academicYearLabel: string;
+  seasonLabel: string;
+  startDateMs: number;
+  endDateMs: number;
+  teachingWeekCount: number;
+}
+
+export interface ShuYoVodCourse {
+  teachingClassId: number;
+  termId: number;
+  name: string;
+  teachingClassName: string;
+  code: string;
+  teacherNames: string[];
+  teacherLabel: string;
+  lessonCount: number;
+  coverUrl: string;
+  isLive: boolean;
+  liveLessonId: number;
+}
+
+export interface ShuYoVodLesson {
+  id: number;
+  teachingClassId: number;
+  name: string;
+  courseName: string;
+  courseCode: string;
+  teacherLabel: string;
+  beginTimeMs: number;
+  endTimeMs: number;
+  dateLabel: string;
+  timeRangeLabel: string;
+  weekNumber: number;
+  weekday: number;
+  sectionNumber: number;
+  sectionLabel: string;
+  classroom: string;
+  watchPercent: string;
+  isPlayable: boolean;
+  isLive: boolean;
+  isLiveAvailable: boolean;
+  isGenerating: boolean;
+  isListed: boolean;
+  statusLabel: string;
+}
+
+export interface ShuYoVodView {
+  viewNumber: number;
+  label: string;
+  url: string;
+}
+
+export interface ShuYoVodPlayback {
+  lessonId: number;
+  teachingClassId: number;
+  title: string;
+  views: ShuYoVodView[];
+  lastPositionSec: number;
+  isLive: boolean;
+  description: string;
+}
+
+export interface ShuYoVodPptSlide {
+  id: string;
+  imageUrl: string;
+  positionSec: number;
+  timeLabel: string;
+  text: string;
+}
+
+export interface ShuYoVodPlayerParam {
+  teachingClassId: number;
+  termId: number;
+  courseName: string;
+  courseCode: string;
+  teacherLabel: string;
+  initialLessonId: number;
+  isLive: boolean;
+  fromSearch: boolean;
 }
