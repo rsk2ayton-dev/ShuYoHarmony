@@ -19,7 +19,7 @@
 |---|---|
 | 应用名称 | `SHU友` |
 | Bundle Name | `com.rsk2ayton.shuyo.harmony` |
-| 当前版本 | `v0.5.2`（`versionCode: 1000001`） |
+| 当前版本 | `v0.5.3`（`versionCode: 1000002`） |
 | 目标 / 兼容 SDK | `HarmonyOS 26.0.0`（Stage 模型 / ArkUI V2） |
 | 支持设备 | `phone` |
 
@@ -28,7 +28,7 @@
 前往本仓库的 [Releases 页面](https://github.com/rsk2ayton-dev/ShuYoHarmony/releases) 下载对应版本的安装包。
 
 > [!NOTE]
-> Release 附件中的 `ShuYoHarmony-v0.5.2-unsigned.hap` 为**未签名（unsigned）** HAP 安装包（本仓库不包含签名密钥）。  
+> Release 附件中的 `ShuYoHarmony-v0.5.3-unsigned.hap` 为**未签名（unsigned）** HAP 安装包（本仓库不包含签名密钥）。  
 > 如需在真机安装运行，请在 DevEco Studio 中配置自动签名（或执行 `devecocli signature generate` 后运行 `devecocli run`），或使用您自己的 HarmonyOS 签名证书与 Profile 对 HAP 进行签名后再安装。
 
 ## 构建与开发
