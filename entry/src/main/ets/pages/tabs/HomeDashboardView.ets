@@ -287,33 +287,65 @@ export struct HomeDashboardView {
         }
       })
 
-      ForEach(this.store.announcements.slice(0, 3), (item: ShuYoAnnouncementItem, idx: number) => {
-        Row({ space: 10 }) {
-          SymbolGlyph($r('sys.symbol.bell'))
-            .fontSize(16)
-            .fontColor([this.store.colors.accent])
-          Column({ space: 2 }) {
-            Text(item.title)
-              .fontSize(14)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(this.store.colors.textPrimary)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-            Text(`${item.sourceName} · ${item.dateText}`)
-              .fontSize(12)
+      if (this.store.announcements.length === 0) {
+        if (this.store.isSyncingAnnouncements) {
+          Row({ space: 10 }) {
+            LoadingProgress().width(18).height(18).color(this.store.colors.accent)
+            Text('正在获取校内最新通知公告...')
+              .fontSize(13)
               .fontColor(this.store.colors.textTertiary)
           }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
+          .width('100%')
+          .padding({ top: 6, bottom: 6 })
+        } else {
+          Row({ space: 10 }) {
+            SymbolGlyph($r('sys.symbol.bell'))
+              .fontSize(16)
+              .fontColor([this.store.colors.textMuted])
+            Text(this.store.announcementsError.length > 0 ? this.store.announcementsError : '暂无通知公告，点击查看全部')
+              .fontSize(13)
+              .fontColor(this.store.colors.textTertiary)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .padding({ top: 8, bottom: 8, left: 10, right: 10 })
+          .borderRadius(10)
+          .backgroundColor(this.store.colors.surfaceAlt)
+          .onClick(() => {
+            this.navStack.pushDestination({ name: 'AnnouncementsPage' });
+          })
         }
-        .width('100%')
-        .padding({ top: 8, bottom: 8, left: 10, right: 10 })
-        .borderRadius(10)
-        .backgroundColor(this.store.colors.surfaceAlt)
-        .onClick(() => {
-          this.navStack.pushDestination({ name: 'AnnouncementsPage' });
-        })
-      }, (item: ShuYoAnnouncementItem, idx: number): string => `${item.id}-${idx}`)
+      } else {
+        ForEach(this.store.announcements.slice(0, 3), (item: ShuYoAnnouncementItem, idx: number) => {
+          Row({ space: 10 }) {
+            SymbolGlyph($r('sys.symbol.bell'))
+              .fontSize(16)
+              .fontColor([this.store.colors.accent])
+            Column({ space: 2 }) {
+              Text(item.title)
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.store.colors.textPrimary)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              Text(`${item.sourceName} · ${item.dateText}`)
+                .fontSize(12)
+                .fontColor(this.store.colors.textTertiary)
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+          }
+          .width('100%')
+          .padding({ top: 8, bottom: 8, left: 10, right: 10 })
+          .borderRadius(10)
+          .backgroundColor(this.store.colors.surfaceAlt)
+          .onClick(() => {
+            this.navStack.pushDestination({ name: 'AnnouncementsPage' });
+          })
+        }, (item: ShuYoAnnouncementItem, idx: number): string => `${item.id}-${idx}`)
+      }
     }
     .width('100%')
     .padding(16)
@@ -373,12 +405,26 @@ export struct HomeDashboardView {
       Column({ space: 14 }) {
         // Header bar
         Row({ space: 10 }) {
-          Image($rawfile('images/icon.png'))
-            .width(38)
-            .height(38)
-            .borderRadius(10)
+          if (this.store.customAvatarUri.length > 0) {
+            Image(this.store.customAvatarUri)
+              .width(38)
+              .height(38)
+              .borderRadius(19)
+              .objectFit(ImageFit.Cover)
+              .onClick(() => {
+                this.navStack.pushDestination({ name: 'AvatarCropPage' });
+              })
+          } else {
+            Image($rawfile('images/icon.png'))
+              .width(38)
+              .height(38)
+              .borderRadius(10)
+              .onClick(() => {
+                this.navStack.pushDestination({ name: 'AvatarCropPage' });
+              })
+          }
           Column({ space: 2 }) {
-            Text(`${this.getGreetingText()}，${this.store.studentName}`)
+            Text(`${this.getGreetingText()}，${this.store.displayName}`)
               .fontSize(19)
               .fontWeight(FontWeight.Bold)
               .fontColor(this.store.colors.textPrimary)

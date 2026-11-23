@@ -226,7 +226,7 @@ struct Index {
             } else if (this.getActiveTabId() === ShuYoTabId.RATE) {
               RateHomeView({ navStack: this.navStack })
             } else if (this.getActiveTabId() === ShuYoTabId.PROGRESS) {
-              AcademicProgressView()
+              AcademicProgressView({ navStack: this.navStack })
             } else {
               AcademicScheduleView({ navStack: this.navStack })
             }

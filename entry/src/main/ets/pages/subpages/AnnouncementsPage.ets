@@ -1,3 +1,4 @@
+import { pasteboard } from '@kit.BasicServicesKit';
 import { ShuYoAnnouncementBlock, ShuYoAnnouncementItem } from '../../models/ShuYoModels';
 import { AnnouncementService } from '../../services/AnnouncementService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
@@ -17,27 +18,122 @@ export struct AnnouncementsPage {
   @Local selectedDetail: ShuYoAnnouncementItem | undefined = undefined;
   @Local showDetailSheet: boolean = false;
   @Local isLoading: boolean = false;
+  @Local isLoadingDetail: boolean = false;
+  @Local errorMessage: string = '';
+  @Local detailError: string = '';
   private store: ShuYoAppStore = ShuYoAppStore.instance();
-  private readonly filterTabs: string[] = ['全部', '学校主页', '教务处'];
+  private sourceCache: Map<string, ShuYoAnnouncementItem[]> = new Map<string, ShuYoAnnouncementItem[]>();
 
   aboutToAppear(): void {
-    this.items = this.store.announcements;
-  }
-
-  private async refreshFeed(): Promise<void> {
     if (this.store.isDemoMode) {
       this.items = AnnouncementService.loadDemoAnnouncements();
-      this.getUIContext().getPromptAction().showToast({ message: '演示公告已刷新' });
+      return;
+    }
+    if (this.store.announcements.length > 0) {
+      this.items = this.store.announcements;
+      this.sourceCache.set('全部', this.store.announcements);
+    } else {
+      this.refreshFeed(false);
+    }
+  }
+
+  private async selectSourceTab(tabName: string): Promise<void> {
+    if (this.selectedSource === tabName) {
+      return;
+    }
+    this.selectedSource = tabName;
+    if (this.store.isDemoMode) {
+      return;
+    }
+    const cached = this.sourceCache.get(tabName);
+    if (cached !== undefined && cached.length > 0) {
+      this.items = cached;
+      this.errorMessage = '';
+      return;
+    }
+    await this.refreshFeed(false);
+  }
+
+  private async refreshFeed(showToast: boolean = true): Promise<void> {
+    if (this.store.isDemoMode) {
+      this.items = AnnouncementService.loadDemoAnnouncements();
+      this.errorMessage = '';
+      if (showToast) {
+        this.getUIContext().getPromptAction().showToast({ message: '演示公告已刷新' });
+      }
       return;
     }
     this.isLoading = true;
+    this.errorMessage = '';
+    const requestedSource = this.selectedSource;
     try {
-      const target = this.selectedSource === '教务处' ? '教务处' : '学校主页';
-      this.items = await AnnouncementService.fetchLiveAnnouncements(target);
-    } catch (_err) {
-      this.items = AnnouncementService.loadDemoAnnouncements();
+      const liveItems = await AnnouncementService.fetchLiveAnnouncements(requestedSource);
+      this.sourceCache.set(requestedSource, liveItems);
+      if (this.selectedSource === requestedSource) {
+        this.items = liveItems;
+      }
+      if (requestedSource === '全部') {
+        this.store.announcements = liveItems;
+        this.store.announcementsError = '';
+      }
+      if (showToast) {
+        this.getUIContext().getPromptAction().showToast({ message: `已加载 ${liveItems.length} 条通知公告` });
+      }
+    } catch (err) {
+      const e = err as Error;
+      const msg = e.message.length > 0 ? e.message : '无法加载通知公告，请检查网络';
+      if (this.selectedSource === requestedSource) {
+        this.errorMessage = msg;
+        if (this.sourceCache.get(requestedSource) === undefined) {
+          this.items = [];
+        }
+      }
     } finally {
       this.isLoading = false;
+    }
+  }
+
+  private async openDetail(item: ShuYoAnnouncementItem): Promise<void> {
+    this.selectedDetail = item;
+    this.detailError = '';
+    this.showDetailSheet = true;
+    if (this.store.isDemoMode || item.blocks.length > 0) {
+      return;
+    }
+    this.isLoadingDetail = true;
+    try {
+      const detailed = await AnnouncementService.fetchLiveDetail(item);
+      if (this.selectedDetail !== undefined && this.selectedDetail.url === item.url) {
+        this.selectedDetail = detailed;
+      }
+      this.replaceCachedItem(detailed);
+    } catch (err) {
+      const e = err as Error;
+      this.detailError = e.message.length > 0 ? e.message : '公告正文加载失败';
+    } finally {
+      this.isLoadingDetail = false;
+    }
+  }
+
+  private replaceCachedItem(updated: ShuYoAnnouncementItem): void {
+    const nextList: ShuYoAnnouncementItem[] = [];
+    for (let i = 0; i < this.items.length; i++) {
+      nextList.push(this.items[i].url === updated.url ? updated : this.items[i]);
+    }
+    this.items = nextList;
+  }
+
+  private copyUrlToClipboard(urlText: string): void {
+    if (urlText.length === 0) {
+      return;
+    }
+    try {
+      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, urlText);
+      const sysPb = pasteboard.getSystemPasteboard();
+      sysPb.setDataSync(data);
+      this.getUIContext().getPromptAction().showToast({ message: '已复制链接到剪贴板' });
+    } catch (_err) {
+      this.getUIContext().getPromptAction().showToast({ message: '复制链接失败' });
     }
   }
 
@@ -46,11 +142,15 @@ export struct AnnouncementsPage {
     const out: ShuYoAnnouncementItem[] = [];
     for (let i = 0; i < this.items.length; i++) {
       const item = this.items[i];
-      if (this.selectedSource !== '全部' && !item.sourceName.includes(this.selectedSource) && this.selectedSource !== '学校主页') {
-        continue;
+      if (this.store.isDemoMode && this.selectedSource !== '全部') {
+        const matchesSource = item.sourceName.includes(this.selectedSource) ||
+          (this.selectedSource === '上海大学官网' && item.sourceName.includes('学校主页'));
+        if (!matchesSource) {
+          continue;
+        }
       }
       if (kw.length > 0) {
-        const hay = `${item.title} ${item.summary} ${item.department}`.toLowerCase();
+        const hay = `${item.title} ${item.summary} ${item.department} ${item.sourceName}`.toLowerCase();
         if (!hay.includes(kw)) {
           continue;
         }
@@ -68,6 +168,16 @@ export struct AnnouncementsPage {
     return this.selectedSource === label ? this.store.colors.onSelectedFill : this.store.colors.textSecondary;
   }
 
+  private getLinkLabel(val: string): string {
+    const idx = val.indexOf('\n');
+    return idx >= 0 ? val.substring(0, idx) : '查看附件 / 原文';
+  }
+
+  private getLinkUrl(val: string): string {
+    const idx = val.indexOf('\n');
+    return idx >= 0 ? val.substring(idx + 1) : val;
+  }
+
   @Builder
   private detailSheetBuilder() {
     Scroll() {
@@ -78,13 +188,65 @@ export struct AnnouncementsPage {
             .fontWeight(FontWeight.Bold)
             .fontColor(this.store.colors.textPrimary)
 
-          Text(`${this.selectedDetail.sourceName} · ${this.selectedDetail.dateText}`)
-            .fontSize(12)
-            .fontColor(this.store.colors.textTertiary)
+          Row({ space: 8 }) {
+            Text(`${this.selectedDetail.sourceName} · ${this.selectedDetail.dateText}`)
+              .fontSize(12)
+              .fontColor(this.store.colors.textTertiary)
+              .layoutWeight(1)
+            if (this.selectedDetail.url.length > 0) {
+              Button('复制原文链接')
+                .height(26)
+                .fontSize(11)
+                .fontColor(this.store.colors.accent)
+                .backgroundColor(this.store.colors.accentSoft)
+                .borderRadius(13)
+                .padding({ left: 10, right: 10 })
+                .onClick(() => {
+                  if (this.selectedDetail !== undefined) {
+                    this.copyUrlToClipboard(this.selectedDetail.url);
+                  }
+                })
+            }
+          }
+          .width('100%')
 
-          if (this.selectedDetail.summary.length > 0) {
+          if (this.isLoadingDetail) {
+            Row({ space: 8 }) {
+              LoadingProgress().width(20).height(20).color(this.store.colors.accent)
+              Text('正在加载公告正文...')
+                .fontSize(13)
+                .fontColor(this.store.colors.textSecondary)
+            }
+            .width('100%')
+            .padding({ top: 12, bottom: 12 })
+          } else if (this.detailError.length > 0) {
+            Column({ space: 8 }) {
+              Text(this.detailError)
+                .fontSize(13)
+                .fontColor(this.store.colors.danger)
+              Button('重试加载')
+                .height(34)
+                .fontSize(12)
+                .fontColor(this.store.colors.onAccent)
+                .backgroundColor(this.store.colors.accent)
+                .borderRadius(10)
+                .onClick(() => {
+                  if (this.selectedDetail !== undefined) {
+                    this.openDetail(this.selectedDetail);
+                  }
+                })
+            }
+            .width('100%')
+            .padding(12)
+            .borderRadius(10)
+            .backgroundColor(this.store.colors.surfaceAlt)
+            .alignItems(HorizontalAlign.Start)
+          }
+
+          if (this.selectedDetail.summary.length > 0 && this.selectedDetail.blocks.length === 0) {
             Text(this.selectedDetail.summary)
               .fontSize(14)
+              .lineHeight(22)
               .fontColor(this.store.colors.textSecondary)
               .padding(12)
               .borderRadius(10)
@@ -93,12 +255,43 @@ export struct AnnouncementsPage {
           }
 
           ForEach(this.selectedDetail.blocks, (blk: ShuYoAnnouncementBlock, idx: number) => {
-            Text(blk.blockValue)
-              .fontSize(14)
-              .lineHeight(22)
-              .fontColor(this.store.colors.textPrimary)
+            if (blk.blockType === 'link') {
+              Row({ space: 8 }) {
+                SymbolGlyph($r('sys.symbol.paperclip'))
+                  .fontSize(16)
+                  .fontColor([this.store.colors.accent])
+                Column({ space: 2 }) {
+                  Text(this.getLinkLabel(blk.blockValue))
+                    .fontSize(13)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.store.colors.accent)
+                  Text(this.getLinkUrl(blk.blockValue))
+                    .fontSize(11)
+                    .fontColor(this.store.colors.textMuted)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Text('复制')
+                  .fontSize(12)
+                  .fontColor(this.store.colors.accent)
+              }
               .width('100%')
-          }, (blk: ShuYoAnnouncementBlock, idx: number): string => `blk-${idx}`)
+              .padding(12)
+              .borderRadius(10)
+              .backgroundColor(this.store.colors.accentSoft)
+              .onClick(() => {
+                this.copyUrlToClipboard(this.getLinkUrl(blk.blockValue));
+              })
+            } else {
+              Text(blk.blockValue)
+                .fontSize(14)
+                .lineHeight(22)
+                .fontColor(this.store.colors.textPrimary)
+                .width('100%')
+            }
+          }, (blk: ShuYoAnnouncementBlock, idx: number): string => `blk-${idx}-${blk.blockType}`)
         }
       }
       .width('100%')
@@ -115,33 +308,38 @@ export struct AnnouncementsPage {
           headerTitle: '通知公告',
           subtitleText: '上海大学校内资讯汇总',
           showBack: true,
-          rightLabel: '',
-          rightSymbolName: 'refresh',
+          rightLabel: '刷新',
+          rightSymbolName: '',
           onBackTap: () => {
             this.navStack.pop();
           },
           onRightTap: () => {
-            this.refreshFeed();
+            this.refreshFeed(true);
           }
         })
 
-        // Source chips
-        Row({ space: 8 }) {
-          ForEach(this.filterTabs, (tabName: string, idx: number) => {
-            Button(tabName)
-              .height(32)
-              .fontSize(12)
-              .fontColor(this.getChipText(tabName))
-              .backgroundColor(this.getChipBg(tabName))
-              .borderRadius(16)
-              .padding({ left: 14, right: 14 })
-              .onClick(() => {
-                this.selectedSource = tabName;
-              })
-          }, (tabName: string, idx: number): string => `src-${tabName}`)
+        // Source chips (horizontal scroll)
+        Scroll() {
+          Row({ space: 8 }) {
+            ForEach(AnnouncementService.filterSources, (tabName: string, idx: number) => {
+              Button(tabName)
+                .height(32)
+                .fontSize(12)
+                .fontColor(this.getChipText(tabName))
+                .backgroundColor(this.getChipBg(tabName))
+                .borderRadius(16)
+                .padding({ left: 14, right: 14 })
+                .onClick(() => {
+                  this.selectSourceTab(tabName);
+                })
+            }, (tabName: string, idx: number): string => `src-${tabName}`)
+          }
+          .padding({ left: 16, right: 16 })
         }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
         .width('100%')
-        .padding({ left: 16, right: 16 })
+        .height(36)
 
         // Search bar
         Row({ space: 8 }) {
@@ -165,19 +363,33 @@ export struct AnnouncementsPage {
         .backgroundColor(this.store.colors.surface)
         .border({ width: 1, color: this.store.colors.border })
 
-        if (this.isLoading) {
-          Column() {
+        if (this.isLoading && this.items.length === 0) {
+          Column({ space: 10 }) {
             LoadingProgress().width(36).height(36).color(this.store.colors.accent)
+            Text('正在获取校内最新通知公告...')
+              .fontSize(13)
+              .fontColor(this.store.colors.textTertiary)
           }
           .width('100%')
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
+        } else if (this.errorMessage.length > 0 && this.getDisplayedItems().length === 0) {
+          ShuYoEmptyState({
+            emptyTitle: '公告加载失败',
+            emptyHint: this.errorMessage,
+            actionText: '重新加载',
+            onActionTap: () => {
+              this.refreshFeed(true);
+            }
+          })
         } else if (this.getDisplayedItems().length === 0) {
           ShuYoEmptyState({
             emptyTitle: '暂无符合条件的公告',
-            emptyHint: '',
-            actionText: '',
-            onActionTap: () => {}
+            emptyHint: '可点击下方按钮刷新或切换栏目查看',
+            actionText: '刷新公告',
+            onActionTap: () => {
+              this.refreshFeed(true);
+            }
           })
         } else {
           List({ space: 10 }) {
@@ -213,11 +425,10 @@ export struct AnnouncementsPage {
                 .border({ width: 1, color: this.store.colors.border })
                 .alignItems(HorizontalAlign.Start)
                 .onClick(() => {
-                  this.selectedDetail = item;
-                  this.showDetailSheet = true;
+                  this.openDetail(item);
                 })
               }
-            }, (item: ShuYoAnnouncementItem, idx: number): string => `${item.id}-${idx}`)
+            }, (item: ShuYoAnnouncementItem, idx: number): string => `${item.id}-${item.url}-${idx}`)
           }
           .layoutWeight(1)
           .width('100%')

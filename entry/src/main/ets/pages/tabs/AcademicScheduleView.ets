@@ -5,6 +5,7 @@ import {
   ShuYoScheduleEditorParam,
   ShuYoUntimedCourse
 } from '../../models/ShuYoModels';
+import { ScheduleService, ShuYoCalendarPreset } from '../../services/ScheduleService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 
 @ComponentV2
@@ -12,25 +13,101 @@ export struct AcademicScheduleView {
   @Param navStack: NavPathStack = new NavPathStack();
   @Local selectedSession: ShuYoCourseSession | undefined = undefined;
   @Local showDetailSheet: boolean = false;
+  @Local showStartWeekSheet: boolean = false;
   @Local showDayListMode: boolean = false;
   @Local selectedDayFilter: number = 1;
+  @Local todayDateStr: string = ScheduleService.getTodayDateStr();
+  @Local draftActualWeek: number = 1;
+  @Local draftPickerDateStr: string = '2026-09-14';
+  @Local draftPickerDate: Date = ScheduleService.makeDate('2026-09-14');
   private store: ShuYoAppStore = ShuYoAppStore.instance();
   private readonly sectionNumbers: number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
   private readonly weekdayNumbers: number[] = [1, 2, 3, 4, 5, 6, 7];
   private readonly rowHeight: number = 52;
+  private readonly pickerMinDate: Date = ScheduleService.makeDate('2025-01-01');
+  private readonly pickerMaxDate: Date = ScheduleService.makeDate('2028-12-31');
 
   aboutToAppear(): void {
+    this.todayDateStr = ScheduleService.getTodayDateStr();
     const jsDay = new Date().getDay();
     this.selectedDayFilter = jsDay === 0 ? 7 : jsDay;
   }
 
   private getWeekList(): number[] {
-    const maxW = this.store.scheduleData.maxWeek > 0 ? this.store.scheduleData.maxWeek : 16;
+    const maxW = this.store.getEffectiveMaxWeek();
     const arr: number[] = [];
     for (let i = 1; i <= maxW; i++) {
       arr.push(i);
     }
     return arr;
+  }
+
+  private isViewingActualWeek(): boolean {
+    return this.store.getRawActualWeek() === this.store.currentWeek;
+  }
+
+  private isExamWeek(): boolean {
+    return this.store.getEffectiveMaxWeek() >= 17 && this.store.currentWeek >= 17;
+  }
+
+  private getDateStrForCell(dayNum: number): string {
+    const startStr = this.store.getEffectiveTermStartDate();
+    const offset = (this.store.currentWeek - 1) * 7 + (dayNum - 1);
+    return ScheduleService.addDaysToDateStr(startStr, offset);
+  }
+
+  private getHeaderDayDateLabel(dayNum: number): string {
+    return ScheduleService.formatMonthDay(this.getDateStrForCell(dayNum));
+  }
+
+  private isTodayCell(dayNum: number): boolean {
+    return this.getDateStrForCell(dayNum) === this.todayDateStr;
+  }
+
+  private getSubtitleSummary(): string {
+    const base = `${this.store.scheduleData.term.academicYearName} ${this.store.scheduleData.term.termName}`.trim();
+    const md = ScheduleService.formatMonthDay(this.store.getEffectiveTermStartDate());
+    const tag = this.store.customTermStartDate.length > 0 ? '自定义' : '校历';
+    return `${base} · ${md}起(${tag})`;
+  }
+
+  private openStartWeekSheet(): void {
+    this.todayDateStr = ScheduleService.getTodayDateStr();
+    const effectiveStart = this.store.getEffectiveTermStartDate();
+    this.draftPickerDateStr = effectiveStart;
+    this.draftPickerDate = ScheduleService.makeDate(effectiveStart);
+    const rawActual = this.store.getRawActualWeek();
+    this.draftActualWeek = rawActual >= 1 && rawActual <= 20 ? rawActual : this.store.currentWeek;
+    this.showStartWeekSheet = true;
+  }
+
+  private handlePickerDateChange(val: Date): void {
+    const y = val.getFullYear();
+    const m = val.getMonth() + 1;
+    const d = val.getDate();
+    const mStr = m < 10 ? `0${m}` : `${m}`;
+    const dStr = d < 10 ? `0${d}` : `${d}`;
+    this.draftPickerDateStr = `${y}-${mStr}-${dStr}`;
+  }
+
+  private getDraftAlignedStart(): string {
+    return ScheduleService.alignToMonday(this.draftPickerDateStr);
+  }
+
+  private getDraftWeekComputedStart(): string {
+    return ScheduleService.computeStartMondayForActualWeek(this.draftActualWeek, this.todayDateStr);
+  }
+
+  private getActualStatusPreview(): string {
+    const raw = this.store.getRawActualWeek();
+    const maxW = this.store.getEffectiveMaxWeek();
+    if (raw < 1) {
+      return `当前日期 ${this.todayDateStr} 尚未开学（第1周始于 ${this.store.getEffectiveTermStartDate()}）`;
+    }
+    if (raw > maxW) {
+      return `当前日期 ${this.todayDateStr} 已超出本学期周次（共 ${maxW} 周）`;
+    }
+    return `按当前设置，今天（${this.todayDateStr}）为第 ${raw} 周`;
   }
 
   private getSessionsForCurrentWeek(): ShuYoCourseSession[] {
@@ -134,6 +211,211 @@ export struct AcademicScheduleView {
   }
 
   @Builder
+  private startWeekSheetBuilder() {
+    Scroll() {
+      Column({ space: 14 }) {
+        Text('学期起始周设置')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.store.colors.textPrimary)
+
+        // Current status card
+        Column({ space: 6 }) {
+          Text(this.store.getEffectiveTermLabel())
+            .fontSize(13)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.store.colors.accent)
+          Text(this.getActualStatusPreview())
+            .fontSize(12)
+            .fontColor(this.store.colors.textSecondary)
+        }
+        .width('100%')
+        .padding(14)
+        .borderRadius(12)
+        .backgroundColor(this.store.colors.accentSoft)
+        .alignItems(HorizontalAlign.Start)
+
+        // Quick calibrate by setting "this week is week N"
+        Column({ space: 10 }) {
+          Text('方式一：直接指定本周为第几周')
+            .fontSize(14)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.store.colors.textPrimary)
+
+          Row({ space: 10 }) {
+            Button('-1周')
+              .height(36)
+              .fontSize(13)
+              .fontColor(this.store.colors.textPrimary)
+              .backgroundColor(this.store.colors.surface)
+              .border({ width: 1, color: this.store.colors.border })
+              .borderRadius(10)
+              .onClick(() => {
+                if (this.draftActualWeek > 1) {
+                  this.draftActualWeek--;
+                }
+              })
+
+            Text(`第 ${this.draftActualWeek} 周`)
+              .layoutWeight(1)
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.store.colors.accent)
+              .textAlign(TextAlign.Center)
+
+            Button('+1周')
+              .height(36)
+              .fontSize(13)
+              .fontColor(this.store.colors.textPrimary)
+              .backgroundColor(this.store.colors.surface)
+              .border({ width: 1, color: this.store.colors.border })
+              .borderRadius(10)
+              .onClick(() => {
+                if (this.draftActualWeek < 20) {
+                  this.draftActualWeek++;
+                }
+              })
+          }
+          .width('100%')
+
+          Text(`推算第 1 周周一：${this.getDraftWeekComputedStart()}`)
+            .fontSize(12)
+            .fontColor(this.store.colors.textTertiary)
+
+          Button(`将本周设为第 ${this.draftActualWeek} 周`)
+            .width('100%')
+            .height(40)
+            .fontSize(13)
+            .fontColor(this.store.colors.onAccent)
+            .backgroundColor(this.store.colors.accent)
+            .borderRadius(10)
+            .onClick(() => {
+              this.store.setActualWeekNumber(this.draftActualWeek);
+              this.showStartWeekSheet = false;
+              this.getUIContext().getPromptAction().showToast({
+                message: `已校准本周为第 ${this.draftActualWeek} 周`
+              });
+            })
+        }
+        .width('100%')
+        .padding(14)
+        .borderRadius(14)
+        .backgroundColor(this.store.colors.surfaceAlt)
+        .alignItems(HorizontalAlign.Start)
+
+        // Custom Week 1 start date via DatePicker
+        Column({ space: 10 }) {
+          Text('方式二：自定义第 1 周起始日期')
+            .fontSize(14)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.store.colors.textPrimary)
+
+          Text(`当前选择 ${this.draftPickerDateStr}（将自动对齐到周一 ${this.getDraftAlignedStart()}）`)
+            .fontSize(12)
+            .fontColor(this.store.colors.textTertiary)
+
+          DatePicker({
+            start: this.pickerMinDate,
+            end: this.pickerMaxDate,
+            selected: this.draftPickerDate
+          })
+            .height(140)
+            .width('100%')
+            .onDateChange((val: Date) => {
+              this.handlePickerDateChange(val);
+            })
+
+          Button(`使用 ${this.getDraftAlignedStart()} 作为第 1 周`)
+            .width('100%')
+            .height(40)
+            .fontSize(13)
+            .fontColor(this.store.colors.textPrimary)
+            .backgroundColor(this.store.colors.surface)
+            .border({ width: 1, color: this.store.colors.borderStrong })
+            .borderRadius(10)
+            .onClick(() => {
+              this.store.setCustomTermStartDate(this.draftPickerDateStr);
+              this.showStartWeekSheet = false;
+              this.getUIContext().getPromptAction().showToast({
+                message: `第 1 周已设为 ${this.store.getEffectiveTermStartDate()}`
+              });
+            })
+        }
+        .width('100%')
+        .padding(14)
+        .borderRadius(14)
+        .backgroundColor(this.store.colors.surfaceAlt)
+        .alignItems(HorizontalAlign.Start)
+
+        // 2026-2027 SHU Official Calendar Presets
+        Column({ space: 8 }) {
+          Row() {
+            Text('上海大学 2026–2027 校历预设')
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.store.colors.textPrimary)
+              .layoutWeight(1)
+            Button('恢复默认校历')
+              .height(28)
+              .fontSize(11)
+              .fontColor(this.store.colors.onSelectedFill)
+              .backgroundColor(this.store.colors.selectedFill)
+              .borderRadius(14)
+              .padding({ left: 10, right: 10 })
+              .onClick(() => {
+                this.store.resetTermStartDateToDefault();
+                this.showStartWeekSheet = false;
+                this.getUIContext().getPromptAction().showToast({
+                  message: `已恢复默认校历（${this.store.getEffectiveTermStartDate()} 起）`
+                });
+              })
+          }
+          .width('100%')
+
+          ForEach(ScheduleService.calendarPresets, (preset: ShuYoCalendarPreset, idx: number) => {
+            Row() {
+              Text(preset.label)
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.store.colors.textPrimary)
+                .layoutWeight(1)
+              Text(`${preset.startDate} · ${preset.maxWeek}周`)
+                .fontSize(12)
+                .fontColor(this.store.colors.textTertiary)
+            }
+            .width('100%')
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .borderRadius(10)
+            .backgroundColor(this.store.colors.surface)
+            .border({
+              width: 1,
+              color: this.store.getEffectiveTermStartDate() === preset.startDate
+                ? this.store.colors.accent
+                : this.store.colors.border
+            })
+            .onClick(() => {
+              this.store.setCustomTermStartDate(preset.startDate);
+              this.showStartWeekSheet = false;
+              this.getUIContext().getPromptAction().showToast({
+                message: `已应用 ${preset.label} 起始周`
+              });
+            })
+          }, (preset: ShuYoCalendarPreset, idx: number): string => `preset-${preset.id}`)
+        }
+        .width('100%')
+        .padding(14)
+        .borderRadius(14)
+        .backgroundColor(this.store.colors.surfaceAlt)
+        .alignItems(HorizontalAlign.Start)
+      }
+      .width('100%')
+      .padding({ left: 20, right: 20, top: 8, bottom: 32 })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .backgroundColor(this.store.colors.surface)
+  }
+
+  @Builder
   private courseDetailSheetBuilder() {
     Column({ space: 14 }) {
       if (this.selectedSession !== undefined) {
@@ -221,41 +503,89 @@ export struct AcademicScheduleView {
   build() {
     Column({ space: 8 }) {
       // Top Header
-      Row({ space: 8 }) {
+      Row({ space: 6 }) {
         Column({ space: 2 }) {
-          Text(`第 ${this.store.currentWeek} 周`)
-            .fontSize(20)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.store.colors.textPrimary)
-          Text(`${this.store.scheduleData.term.academicYearName} ${this.store.scheduleData.term.termName}`)
-            .fontSize(12)
+          Row({ space: 6 }) {
+            Text(`第 ${this.store.currentWeek} 周`)
+              .fontSize(20)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.store.colors.textPrimary)
+
+            if (this.isViewingActualWeek()) {
+              Text('本周')
+                .fontSize(10)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.store.colors.onAccent)
+                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                .borderRadius(8)
+                .backgroundColor(this.store.colors.accent)
+            } else {
+              Text('回本周')
+                .fontSize(10)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.store.colors.accent)
+                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                .borderRadius(8)
+                .backgroundColor(this.store.colors.accentSoft)
+                .onClick(() => {
+                  this.store.setCurrentWeek(this.store.computeActualCurrentWeek());
+                })
+            }
+
+            if (this.isExamWeek()) {
+              Text('考试周')
+                .fontSize(10)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.store.colors.warning)
+                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                .borderRadius(8)
+                .backgroundColor(this.store.colors.surfaceAlt)
+            }
+          }
+
+          Text(this.getSubtitleSummary())
+            .fontSize(11)
             .fontColor(this.store.colors.textTertiary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .onClick(() => {
+              this.navStack.pushDestination({ name: 'ScheduleCollectionPage' });
+            })
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
-        .onClick(() => {
-          this.navStack.pushDestination({ name: 'ScheduleCollectionPage' });
-        })
 
-        Button(this.showDayListMode ? '周视图' : '列表')
-          .height(32)
-          .fontSize(12)
+        Button('起始周')
+          .height(30)
+          .fontSize(11)
           .fontColor(this.store.colors.textPrimary)
           .backgroundColor(this.store.colors.surface)
           .border({ width: 1, color: this.store.colors.border })
-          .borderRadius(16)
-          .padding({ left: 10, right: 10 })
+          .borderRadius(15)
+          .padding({ left: 9, right: 9 })
+          .onClick(() => {
+            this.openStartWeekSheet();
+          })
+
+        Button(this.showDayListMode ? '周' : '列表')
+          .height(30)
+          .fontSize(11)
+          .fontColor(this.store.colors.textPrimary)
+          .backgroundColor(this.store.colors.surface)
+          .border({ width: 1, color: this.store.colors.border })
+          .borderRadius(15)
+          .padding({ left: 9, right: 9 })
           .onClick(() => {
             this.showDayListMode = !this.showDayListMode;
           })
 
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.upload'))
-            .fontSize(16)
+            .fontSize(15)
             .fontColor([this.store.colors.textPrimary])
         }
-        .width(34)
-        .height(34)
+        .width(30)
+        .height(30)
         .backgroundColor(this.store.colors.surface)
         .border({ width: 1, color: this.store.colors.border })
         .onClick(() => {
@@ -264,11 +594,11 @@ export struct AcademicScheduleView {
 
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-            .fontSize(16)
+            .fontSize(15)
             .fontColor([this.store.colors.textPrimary])
         }
-        .width(34)
-        .height(34)
+        .width(30)
+        .height(30)
         .backgroundColor(this.store.colors.surface)
         .border({ width: 1, color: this.store.colors.border })
         .onClick(() => {
@@ -277,11 +607,11 @@ export struct AcademicScheduleView {
 
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(16)
+            .fontSize(15)
             .fontColor([this.store.colors.onAccent])
         }
-        .width(34)
-        .height(34)
+        .width(30)
+        .height(30)
         .backgroundColor(this.store.colors.accent)
         .onClick(() => {
           this.openAddCourse();
@@ -289,6 +619,11 @@ export struct AcademicScheduleView {
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 12 })
+      .bindSheet($$this.showStartWeekSheet, this.startWeekSheetBuilder(), {
+        height: SheetSize.LARGE,
+        dragBar: true,
+        showClose: true
+      })
 
       // Week Selector Strip
       Scroll() {
@@ -304,7 +639,7 @@ export struct AcademicScheduleView {
               .onClick(() => {
                 this.store.setCurrentWeek(w);
               })
-          }, (w: number, idx: number): string => `week-${w}`)
+          }, (w: number, idx: number): string => `week-${w}-${this.store.getEffectiveMaxWeek()}`)
         }
         .padding({ left: 16, right: 16 })
       }
@@ -476,13 +811,13 @@ export struct AcademicScheduleView {
                 this.showDetailSheet = true;
               })
             }
-          }, (s: ShuYoCourseSession, idx: number): string => `list-${s.id}-${idx}`)
+          }, (s: ShuYoCourseSession, idx: number): string => `list-${s.id}-${idx}-${this.store.currentWeek}-${this.store.dataRevision}`)
         }
         .width('100%')
         .layoutWeight(1)
         .padding({ left: 16, right: 16, bottom: 16 })
       } else {
-        // 7-day Timetable Grid Header
+        // 7-day Timetable Grid Header with actual calendar dates
         Row() {
           Text('节')
             .width(34)
@@ -490,13 +825,18 @@ export struct AcademicScheduleView {
             .textAlign(TextAlign.Center)
             .fontColor(this.store.colors.textMuted)
           ForEach(this.weekdayNumbers, (dayNum: number, idx: number) => {
-            Text(ShuYoConstants.weekdayLabels[dayNum - 1])
-              .layoutWeight(1)
-              .fontSize(12)
-              .fontWeight(FontWeight.Medium)
-              .textAlign(TextAlign.Center)
-              .fontColor(this.store.colors.textSecondary)
-          }, (dayNum: number, idx: number): string => `hdr-${dayNum}`)
+            Column({ space: 1 }) {
+              Text(ShuYoConstants.weekdayLabels[dayNum - 1])
+                .fontSize(12)
+                .fontWeight(this.isTodayCell(dayNum) ? FontWeight.Bold : FontWeight.Medium)
+                .fontColor(this.isTodayCell(dayNum) ? this.store.colors.accent : this.store.colors.textSecondary)
+              Text(this.getHeaderDayDateLabel(dayNum))
+                .fontSize(9)
+                .fontColor(this.isTodayCell(dayNum) ? this.store.colors.accent : this.store.colors.textMuted)
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Center)
+          }, (dayNum: number, idx: number): string => `hdr-${dayNum}-${this.store.currentWeek}-${this.store.customTermStartDate}-${this.store.dataRevision}`)
         }
         .width('100%')
         .padding({ left: 6, right: 6, top: 4, bottom: 4 })

@@ -89,6 +89,11 @@
       "name": "CourseRecordingPlayerPage",
       "pageSourceFile": "src/main/ets/pages/subpages/CourseRecordingPlayerPage.ets",
       "buildFunction": "CourseRecordingPlayerPageBuilder"
+    },
+    {
+      "name": "AvatarCropPage",
+      "pageSourceFile": "src/main/ets/pages/subpages/AvatarCropPage.ets",
+      "buildFunction": "AvatarCropPageBuilder"
     }
   ]
 }

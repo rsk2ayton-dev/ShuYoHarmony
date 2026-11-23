@@ -1,5 +1,7 @@
 # ShuYoHarmony（SHU友 原生鸿蒙版）
 
+![Language](https://img.shields.io/badge/Language-ArkTS-0080FF) ![Platform](https://img.shields.io/badge/Platform-HarmonyOS-0A59F7)
+
 专为上海大学师生设计的校园一站式服务原生 HarmonyOS 应用，基于 ArkTS 与 ArkUI 状态管理 V2 开发，改编自开源项目 [shuosc/ShuYo](https://github.com/shuosc/ShuYo)。
 
 ## 核心功能

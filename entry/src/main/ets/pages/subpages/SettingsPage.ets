@@ -13,7 +13,86 @@ export function SettingsPageBuilder(): void {
 @ComponentV2
 export struct SettingsPage {
   @Local navStack: NavPathStack = new NavPathStack();
+  @Local showNicknameSheet: boolean = false;
+  @Local draftNickname: string = '';
   private store: ShuYoAppStore = ShuYoAppStore.instance();
+
+  private openNicknameEditor(): void {
+    this.draftNickname = this.store.customNickname.length > 0
+      ? this.store.customNickname
+      : this.store.studentName;
+    this.showNicknameSheet = true;
+  }
+
+  private saveNickname(): void {
+    this.store.setCustomNickname(this.draftNickname);
+    this.showNicknameSheet = false;
+    this.getUIContext().getPromptAction().showToast({
+      message: this.store.customNickname.length > 0 ? '昵称已更新' : '已恢复默认姓名'
+    });
+  }
+
+  private resetNickname(): void {
+    this.store.setCustomNickname('');
+    this.showNicknameSheet = false;
+    this.getUIContext().getPromptAction().showToast({ message: '已恢复默认姓名' });
+  }
+
+  @Builder
+  private nicknameSheetBuilder() {
+    Column({ space: 14 }) {
+      Text('修改个人昵称')
+        .fontSize(19)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.store.colors.textPrimary)
+
+      Text(`系统姓名：${this.store.studentName}（留空将显示系统默认姓名）`)
+        .fontSize(12)
+        .fontColor(this.store.colors.textTertiary)
+
+      TextInput({ placeholder: '输入自定义昵称（最多 20 字）', text: this.draftNickname })
+        .height(44)
+        .maxLength(20)
+        .fontSize(15)
+        .fontColor(this.store.colors.textPrimary)
+        .backgroundColor(this.store.colors.surfaceAlt)
+        .borderRadius(12)
+        .padding({ left: 12, right: 12 })
+        .onChange((val: string) => {
+          this.draftNickname = val;
+        })
+
+      Row({ space: 10 }) {
+        Button('恢复默认')
+          .height(42)
+          .fontSize(14)
+          .fontColor(this.store.colors.textSecondary)
+          .backgroundColor(this.store.colors.surfaceAlt)
+          .border({ width: 1, color: this.store.colors.border })
+          .borderRadius(12)
+          .padding({ left: 14, right: 14 })
+          .onClick(() => {
+            this.resetNickname();
+          })
+
+        Button('保存昵称')
+          .layoutWeight(1)
+          .height(42)
+          .fontSize(14)
+          .fontColor(this.store.colors.onAccent)
+          .backgroundColor(this.store.colors.accent)
+          .borderRadius(12)
+          .onClick(() => {
+            this.saveNickname();
+          })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ left: 20, right: 20, top: 8, bottom: 28 })
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor(this.store.colors.surface)
+  }
 
   private getIdentityStatus(): string {
     if (this.store.isDemoMode) {
@@ -76,11 +155,33 @@ export struct SettingsPage {
             // Account Card
             Column({ space: 12 }) {
               Row({ space: 10 }) {
-                SymbolGlyph($r('sys.symbol.person'))
-                  .fontSize(22)
-                  .fontColor([this.store.colors.accent])
+                if (this.store.customAvatarUri.length > 0) {
+                  Image(this.store.customAvatarUri)
+                    .width(46)
+                    .height(46)
+                    .borderRadius(23)
+                    .objectFit(ImageFit.Cover)
+                    .onClick(() => {
+                      this.navStack.pushDestination({ name: 'AvatarCropPage' });
+                    })
+                } else {
+                  Column() {
+                    SymbolGlyph($r('sys.symbol.person'))
+                      .fontSize(22)
+                      .fontColor([this.store.colors.accent])
+                  }
+                  .width(46)
+                  .height(46)
+                  .borderRadius(23)
+                  .backgroundColor(this.store.colors.accentSoft)
+                  .justifyContent(FlexAlign.Center)
+                  .alignItems(HorizontalAlign.Center)
+                  .onClick(() => {
+                    this.navStack.pushDestination({ name: 'AvatarCropPage' });
+                  })
+                }
                 Column({ space: 2 }) {
-                  Text(this.store.studentName)
+                  Text(this.store.displayName)
                     .fontSize(16)
                     .fontWeight(FontWeight.Bold)
                     .fontColor(this.store.colors.textPrimary)
@@ -100,6 +201,32 @@ export struct SettingsPage {
                   .padding({ left: 12, right: 12 })
                   .onClick(() => {
                     this.navStack.pushDestination({ name: 'NativeLoginPage' });
+                  })
+              }
+              .width('100%')
+
+              Row({ space: 8 }) {
+                Button('修改昵称')
+                  .layoutWeight(1)
+                  .height(34)
+                  .fontSize(12)
+                  .fontColor(this.store.colors.textPrimary)
+                  .backgroundColor(this.store.colors.surfaceAlt)
+                  .border({ width: 1, color: this.store.colors.border })
+                  .borderRadius(10)
+                  .onClick(() => {
+                    this.openNicknameEditor();
+                  })
+
+                Button('更换头像')
+                  .layoutWeight(1)
+                  .height(34)
+                  .fontSize(12)
+                  .fontColor(this.store.colors.accent)
+                  .backgroundColor(this.store.colors.accentSoft)
+                  .borderRadius(10)
+                  .onClick(() => {
+                    this.navStack.pushDestination({ name: 'AvatarCropPage' });
                   })
               }
               .width('100%')
@@ -137,6 +264,11 @@ export struct SettingsPage {
             .borderRadius(16)
             .backgroundColor(this.store.colors.surface)
             .border({ width: 1, color: this.store.colors.border })
+            .bindSheet($$this.showNicknameSheet, this.nicknameSheetBuilder(), {
+              height: SheetSize.FIT_CONTENT,
+              dragBar: true,
+              showClose: true
+            })
 
             // Theme Picker Card
             Column({ space: 12 }) {

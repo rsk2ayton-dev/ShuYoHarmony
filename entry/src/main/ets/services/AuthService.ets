@@ -390,6 +390,34 @@ export class AuthService {
     throw new Error('教务系统登录跳转次数过多');
   }
 
+  static async trySilentAcademicReauth(): Promise<boolean> {
+    if (!ShuYoCookieJar.hasCookie(ShuYoConstants.ssoBaseUrl, 'SHU_OAUTH2')) {
+      return false;
+    }
+    try {
+      const target = ShuYoConstants.targetAcademic;
+      const authUrl =
+        `${ShuYoConstants.ssoBaseUrl}/oauth/authorize?response_type=code` +
+        `&client_id=${encodeURIComponent(target.clientId)}` +
+        `&redirect_uri=${encodeURIComponent(target.redirectUri)}` +
+        `&scope=${encodeURIComponent(target.scope)}` +
+        `&state=reauth`;
+      const resp = await HttpClientService.request(http.RequestMethod.GET, authUrl, {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      });
+      if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.location.length > 0) {
+        const nextUrl = AuthService.canonicalSsoUrl(HttpClientService.resolveUrl(authUrl, resp.location));
+        if (AuthService.isAuthorizedCallback(nextUrl)) {
+          const verified = await AuthService.completeAcademicLogin(nextUrl, authUrl, '');
+          return verified.length > 0;
+        }
+      }
+      return false;
+    } catch (_err) {
+      return false;
+    }
+  }
+
   private static async completeGraduateLogin(
     callbackUri: string,
     refererUri: string,

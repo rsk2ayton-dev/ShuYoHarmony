@@ -83,10 +83,13 @@ export interface ShuYoProgressCourse {
 
 export interface ShuYoProgressNode {
   id: string;
+  parentId: string;
   name: string;
   requiredCredits: number;
   earnedCredits: number;
   passed: boolean;
+  courseKind: string;
+  isLeaf: boolean;
   courses: ShuYoProgressCourse[];
 }
 
@@ -110,6 +113,7 @@ export interface ShuYoProgressSummary {
   notTakenCourses: number;
   nodes: ShuYoProgressNode[];
   ranking: ShuYoRankingInfo;
+  isLoaded: boolean;
 }
 
 export interface ShuYoAnnouncementBlock {
@@ -319,10 +323,23 @@ export interface ShuYoRateReviewRecord {
   updatedAt: string;
 }
 
+export interface ShuYoRateRankingCategory {
+  key: string;
+  title: string;
+  total: number;
+  items: ShuYoRateUnitItem[];
+}
+
+export interface ShuYoRateUnitDetail {
+  unit: ShuYoRateUnitItem;
+  stats: ShuYoRateQuestionStat[];
+}
+
 export interface ShuYoRateHomeData {
   recent: ShuYoRateUnitItem[];
   rankingTitle: string;
   rankingItems: ShuYoRateUnitItem[];
+  rankings: ShuYoRateRankingCategory[];
   colleges: string[];
   questions: ShuYoRateQuestion[];
 }

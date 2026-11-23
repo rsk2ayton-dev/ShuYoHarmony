@@ -354,6 +354,41 @@ export class HttpClientService {
     return rawUrl;
   }
 
+  private static normalizePathWithSuffix(rawPathWithSuffix: string): string {
+    const qIdx = rawPathWithSuffix.indexOf('?');
+    const hashIdx = rawPathWithSuffix.indexOf('#');
+    let splitIdx = rawPathWithSuffix.length;
+    if (qIdx >= 0 && qIdx < splitIdx) {
+      splitIdx = qIdx;
+    }
+    if (hashIdx >= 0 && hashIdx < splitIdx) {
+      splitIdx = hashIdx;
+    }
+    const pathPart = rawPathWithSuffix.substring(0, splitIdx);
+    const suffix = rawPathWithSuffix.substring(splitIdx);
+    const hasTrailingSlash = pathPart.endsWith('/');
+    const rawSegments = pathPart.split('/');
+    const stack: string[] = [];
+    for (let i = 0; i < rawSegments.length; i++) {
+      const seg = rawSegments[i];
+      if (seg.length === 0 || seg === '.') {
+        continue;
+      }
+      if (seg === '..') {
+        if (stack.length > 0) {
+          stack.pop();
+        }
+      } else {
+        stack.push(seg);
+      }
+    }
+    let normalizedPath = '/' + stack.join('/');
+    if (hasTrailingSlash && stack.length > 0 && !normalizedPath.endsWith('/')) {
+      normalizedPath += '/';
+    }
+    return normalizedPath + suffix;
+  }
+
   static resolveUrl(baseUrl: string, relativeOrAbs: string): string {
     const trimmed = relativeOrAbs.trim();
     if (trimmed.length === 0) {
@@ -372,7 +407,8 @@ export class HttpClientService {
     }
     const origin = HttpClientService.extractOrigin(baseUrl);
     if (trimmed.startsWith('/')) {
-      return HttpClientService.upgradeShuHttpUrl(origin + trimmed);
+      const normRootPath = HttpClientService.normalizePathWithSuffix(trimmed);
+      return HttpClientService.upgradeShuHttpUrl(origin + normRootPath);
     }
     if (trimmed.startsWith('?')) {
       const qIdx = baseUrl.indexOf('?');
@@ -389,7 +425,8 @@ export class HttpClientService {
     const basePath = HttpClientService.extractPath(baseUrl);
     const lastSlash = basePath.lastIndexOf('/');
     const baseDir = lastSlash >= 0 ? basePath.substring(0, lastSlash + 1) : '/';
-    return HttpClientService.upgradeShuHttpUrl(`${origin}${baseDir}${trimmed}`);
+    const normJoined = HttpClientService.normalizePathWithSuffix(`${baseDir}${trimmed}`);
+    return HttpClientService.upgradeShuHttpUrl(`${origin}${normJoined}`);
   }
 
   private static toRcpMethod(method: http.RequestMethod): rcp.HttpMethod {

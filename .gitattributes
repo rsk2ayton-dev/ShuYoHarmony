@@ -1,0 +1,2 @@
+*.ets linguist-language=ArkTS linguist-detectable=true
+entry/src/main/resources/rawfile/** linguist-vendored

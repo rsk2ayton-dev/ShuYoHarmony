@@ -11,6 +11,13 @@ import { HttpClientService } from './HttpClientService';
 import { JsonHelpers } from './JsonHelpers';
 import { RawFileService } from './RawFileService';
 
+export interface ShuYoCalendarPreset {
+  id: string;
+  label: string;
+  startDate: string;
+  maxWeek: number;
+}
+
 interface GraduatePlacement {
   courseCode: string;
   classId: string;
@@ -62,8 +69,138 @@ export class ScheduleService {
       sessions: [],
       untimedCourses: [],
       fetchedAt: '',
-      maxWeek: 16
+      maxWeek: 18
     };
+  }
+
+  static readonly calendarPresets: ShuYoCalendarPreset[] = [
+    { id: '2026-autumn', label: '2026-2027 秋季学期', startDate: '2026-09-14', maxWeek: 18 },
+    { id: '2026-spring', label: '2026-2027 春季学期', startDate: '2027-02-22', maxWeek: 18 },
+    { id: '2026-summer', label: '2026-2027 夏季实践', startDate: '2027-06-28', maxWeek: 4 },
+    { id: '2027-autumn', label: '2027-2028 秋季学期', startDate: '2027-09-06', maxWeek: 18 }
+  ];
+
+  private static pad2(val: number): string {
+    return val < 10 ? `0${val}` : `${val}`;
+  }
+
+  private static parseDateParts(dateStr: string): number[] | undefined {
+    const m = new RegExp('^(\\d{4})-(\\d{1,2})-(\\d{1,2})$').exec(dateStr.trim());
+    if (m === null) {
+      return undefined;
+    }
+    const y = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const d = parseInt(m[3], 10);
+    if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d) ||
+      mo < 1 || mo > 12 || d < 1 || d > 31) {
+      return undefined;
+    }
+    return [y, mo, d];
+  }
+
+  private static dateToUtcDay(dateStr: string): number {
+    const parts = ScheduleService.parseDateParts(dateStr);
+    if (parts === undefined) {
+      return Number.NaN;
+    }
+    return Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2]) / 86400000);
+  }
+
+  private static utcDayToDateStr(utcDay: number): string {
+    const d = new Date(utcDay * 86400000);
+    return `${d.getUTCFullYear()}-${ScheduleService.pad2(d.getUTCMonth() + 1)}-${ScheduleService.pad2(d.getUTCDate())}`;
+  }
+
+  static makeDate(dateStr: string): Date {
+    const parts = ScheduleService.parseDateParts(dateStr);
+    if (parts === undefined) {
+      return new Date(2026, 8, 14);
+    }
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+
+  static getTodayDateStr(): string {
+    const d = new Date();
+    return `${d.getFullYear()}-${ScheduleService.pad2(d.getMonth() + 1)}-${ScheduleService.pad2(d.getDate())}`;
+  }
+
+  static alignToMonday(dateStr: string): string {
+    const parts = ScheduleService.parseDateParts(dateStr);
+    if (parts === undefined) {
+      return '2026-09-14';
+    }
+    const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    const utcDay = d.getUTCDay();
+    const offset = utcDay === 0 ? 6 : utcDay - 1;
+    d.setUTCDate(d.getUTCDate() - offset);
+    return `${d.getUTCFullYear()}-${ScheduleService.pad2(d.getUTCMonth() + 1)}-${ScheduleService.pad2(d.getUTCDate())}`;
+  }
+
+  static addDaysToDateStr(dateStr: string, deltaDays: number): string {
+    const dayNum = ScheduleService.dateToUtcDay(dateStr);
+    if (!Number.isFinite(dayNum)) {
+      return dateStr;
+    }
+    return ScheduleService.utcDayToDateStr(dayNum + deltaDays);
+  }
+
+  static computeWeekFromStart(startMondayStr: string, targetDateStr: string): number {
+    const startDay = ScheduleService.dateToUtcDay(ScheduleService.alignToMonday(startMondayStr));
+    const targetDay = ScheduleService.dateToUtcDay(ScheduleService.alignToMonday(targetDateStr));
+    if (!Number.isFinite(startDay) || !Number.isFinite(targetDay)) {
+      return 1;
+    }
+    return Math.floor((targetDay - startDay) / 7) + 1;
+  }
+
+  static computeStartMondayForActualWeek(weekNumber: number, todayStr: string): string {
+    const safeWeek = weekNumber >= 1 ? weekNumber : 1;
+    const thisMonday = ScheduleService.alignToMonday(todayStr);
+    return ScheduleService.addDaysToDateStr(thisMonday, -(safeWeek - 1) * 7);
+  }
+
+  static formatMonthDay(dateStr: string): string {
+    const parts = ScheduleService.parseDateParts(dateStr);
+    if (parts === undefined) {
+      return '';
+    }
+    return `${parts[1]}/${parts[2]}`;
+  }
+
+  static resolveDefaultCalendarPreset(term: ShuYoAcademicTerm): ShuYoCalendarPreset {
+    const yearStr = term.academicYearName.trim();
+    const termName = term.termName.trim();
+    const termCode = term.termCode.trim();
+    const is2026Year = yearStr.includes('2026-2027') || term.yearCode.trim() === '2026';
+    const is2027Year = yearStr.includes('2027-2028') || term.yearCode.trim() === '2027';
+
+    if (is2026Year) {
+      if (termName.includes('秋') || termCode === '3') {
+        return ScheduleService.calendarPresets[0];
+      }
+      if (termName.includes('春') || termCode === '16') {
+        return ScheduleService.calendarPresets[1];
+      }
+      if (termName.includes('夏') || termCode === '32') {
+        return ScheduleService.calendarPresets[2];
+      }
+    }
+    if (is2027Year && (termName.includes('秋') || termCode === '3')) {
+      return ScheduleService.calendarPresets[3];
+    }
+
+    const todayStr = ScheduleService.getTodayDateStr();
+    if (todayStr < '2027-02-08') {
+      return ScheduleService.calendarPresets[0];
+    }
+    if (todayStr <= '2027-06-27') {
+      return ScheduleService.calendarPresets[1];
+    }
+    if (todayStr <= '2027-08-22') {
+      return ScheduleService.calendarPresets[2];
+    }
+    return ScheduleService.calendarPresets[3];
   }
 
   private static indicatesSsoLogin(value: string): boolean {
