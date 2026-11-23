@@ -14,8 +14,8 @@ export interface ShuYoWeComOAuthTarget {
 }
 
 export class ShuYoConstants {
-  static readonly appVersion: string = '0.6.0-beta.1';
-  static readonly buildNumber: number = 26;
+  static readonly appVersion: string = '0.6.0.1';
+  static readonly buildNumber: number = 27;
   static readonly bundleName: string = 'com.rsk2ayton.shuyo.harmony';
   static readonly userAgent: string =
     'Mozilla/5.0 (Linux; Android 14; HarmonyOS) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
@@ -66,7 +66,9 @@ export class ShuYoConstants {
   static readonly vodApiPath: string = '/jy-application-resourcemanage';
   static readonly vodUiPath: string = '/jy-application-resourcemanage-ui';
 
+  static readonly thereHost: string = 'there.shu.edu.cn';
   static readonly thereBaseUrl: string = 'https://there.shu.edu.cn';
+  static readonly thereWebVpnBaseUrl: string = 'https://https-there-shu-edu-cn-443.webvpn.shu.edu.cn';
   static readonly clientBackendBaseUrl: string = 'https://api.shuyo.work';
 
   static readonly weComAppId: string = 'wxa8dea949443de641';
@@ -100,6 +102,15 @@ export class ShuYoConstants {
     clientName: '校园卡查询',
     scope: '1',
     redirectUri: 'https://eportal.shu.edu.cn/login',
+    generateState: false
+  };
+
+  static readonly targetThere: ShuYoWeComOAuthTarget = {
+    kind: 'there',
+    clientId: 'eDrd-M0i0WoSWRxk7ShDC1n-fbS7jRvi',
+    clientName: '图书馆预约',
+    scope: '1',
+    redirectUri: 'https://there.shu.edu.cn/login-oauth2',
     generateState: false
   };
 
