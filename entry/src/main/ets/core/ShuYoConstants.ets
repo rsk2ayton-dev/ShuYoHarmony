@@ -14,8 +14,8 @@ export interface ShuYoWeComOAuthTarget {
 }
 
 export class ShuYoConstants {
-  static readonly appVersion: string = '0.5.1';
-  static readonly buildNumber: number = 23;
+  static readonly appVersion: string = '0.5.2';
+  static readonly buildNumber: number = 24;
   static readonly bundleName: string = 'com.rsk2ayton.shuyo.harmony';
   static readonly userAgent: string =
     'Mozilla/5.0 (Linux; Android 14; HarmonyOS) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
