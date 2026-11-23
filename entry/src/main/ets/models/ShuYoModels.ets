@@ -117,8 +117,11 @@ export interface ShuYoProgressSummary {
 }
 
 export interface ShuYoAnnouncementBlock {
-  blockType: string;
+  blockType: string; // 'text' | 'image' | 'link' | 'table'
   blockValue: string;
+  alt?: string;
+  label?: string;
+  rows?: string[][];
 }
 
 export interface ShuYoAnnouncementItem {

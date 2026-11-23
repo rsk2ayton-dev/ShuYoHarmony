@@ -69,6 +69,8 @@ export class ShuYoConstants {
   static readonly thereHost: string = 'there.shu.edu.cn';
   static readonly thereBaseUrl: string = 'https://there.shu.edu.cn';
   static readonly thereWebVpnBaseUrl: string = 'https://https-there-shu-edu-cn-443.webvpn.shu.edu.cn';
+  static readonly chaoxingBaseUrl: string = 'https://office.chaoxing.com';
+  static readonly chaoxingFidEnc: string = '00bae7f2bdea485a';
   static readonly clientBackendBaseUrl: string = 'https://api.shuyo.work';
 
   static readonly weComAppId: string = 'wxa8dea949443de641';
@@ -111,6 +113,15 @@ export class ShuYoConstants {
     clientName: '图书馆预约',
     scope: '1',
     redirectUri: 'https://there.shu.edu.cn/login-oauth2',
+    generateState: false
+  };
+
+  static readonly targetChaoxing: ShuYoWeComOAuthTarget = {
+    kind: 'chaoxing',
+    clientId: 'mK5y895566T96v8Z52z5M3J85K8Miv38',
+    clientName: '超星图书馆预约',
+    scope: '',
+    redirectUri: 'https://zhstsg-jx.5read.com/oauthlogin/loginByCodeSchoolid?schoolid=2434&type=xxt',
     generateState: false
   };
 

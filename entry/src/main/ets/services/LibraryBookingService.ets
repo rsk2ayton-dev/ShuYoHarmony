@@ -7,14 +7,17 @@ import {
   ShuYoLibraryVenue
 } from '../models/ShuYoModels';
 import { AuthService } from './AuthService';
+import { ChaoxingBookingService } from './ChaoxingBookingService';
 import { HttpClientService, ShuYoCookieJar } from './HttpClientService';
 import { JsonHelpers } from './JsonHelpers';
+import { LibraryFloorPlanLayout } from './LibraryFloorPlanLayout';
 import { RawFileService } from './RawFileService';
 
 interface ShuYoVenueMeta {
   roomType: string;
   mobilePath: string;
   isThere: boolean;
+  isChaoxing: boolean;
 }
 
 export interface ShuYoLibrarySlotQueryResult {
@@ -42,8 +45,9 @@ export class LibraryBookingService {
     { id: 'library', name: '宝山校本部图书馆', campusName: '宝山校区', areaNames: ['二楼东侧', '二楼西侧', '三楼阅览室'] },
     { id: 'qianweichang', name: '钱伟长图书馆', campusName: '宝山校区', areaNames: ['四楼外圈', '四楼内圈'] },
     { id: 'scienceArt', name: '科艺中心共享空间', campusName: '宝山校区', areaNames: ['创作中心A', '创作中心B'] },
-    { id: 'yanchang', name: '延长校区图书馆', campusName: '延长校区', areaNames: ['B区', 'C区'] },
-    { id: 'jiading', name: '嘉定校区图书馆', campusName: '嘉定校区', areaNames: ['一楼自修室', '二楼自修区'] }
+    { id: 'yanchang', name: '延长智能中心', campusName: '延长校区', areaNames: ['B区', 'C区'] },
+    { id: 'wenhui', name: '延长文荟馆', campusName: '延长校区', areaNames: ['一楼自修区', '二楼自修区'] },
+    { id: 'jiading', name: '嘉定联合馆', campusName: '嘉定校区', areaNames: ['一楼自修室', '二楼自修区'] }
   ];
 
   static readonly timeOptions: string[] = [
@@ -59,12 +63,13 @@ export class LibraryBookingService {
 
   private static buildVenueMetaMap(): Map<string, ShuYoVenueMeta> {
     const m = new Map<string, ShuYoVenueMeta>();
-    m.set('library', { roomType: 'LIB_SEAT', mobilePath: '/mobile/libseat', isThere: true });
-    m.set('studySpace', { roomType: 'STATION', mobilePath: '/mobile/seat2021', isThere: true });
-    m.set('yanchang', { roomType: 'SEAT', mobilePath: '/mobile/seat-mgr', isThere: true });
-    m.set('scienceArt', { roomType: 'CS_SEAT', mobilePath: '/mobile/csseat', isThere: true });
-    m.set('qianweichang', { roomType: 'CX_QWC', mobilePath: '', isThere: false });
-    m.set('jiading', { roomType: 'CX_JD', mobilePath: '', isThere: false });
+    m.set('library', { roomType: 'LIB_SEAT', mobilePath: '/mobile/libseat', isThere: true, isChaoxing: false });
+    m.set('studySpace', { roomType: 'STATION', mobilePath: '/mobile/seat2021', isThere: true, isChaoxing: false });
+    m.set('yanchang', { roomType: 'SEAT', mobilePath: '/mobile/seat-mgr', isThere: true, isChaoxing: false });
+    m.set('scienceArt', { roomType: 'CS_SEAT', mobilePath: '/mobile/csseat', isThere: true, isChaoxing: false });
+    m.set('qianweichang', { roomType: 'CX_QWC', mobilePath: '', isThere: false, isChaoxing: true });
+    m.set('wenhui', { roomType: 'CX_WH', mobilePath: '', isThere: false, isChaoxing: true });
+    m.set('jiading', { roomType: 'CX_JD', mobilePath: '', isThere: false, isChaoxing: true });
     return m;
   }
 
@@ -112,7 +117,7 @@ export class LibraryBookingService {
       }
       return { prefix: 'C', count: 109, digits: 3 };
     }
-    return { prefix: '', count: 24, digits: 2 };
+    return { prefix: '', count: 40, digits: 3 };
   }
 
   private static formatSeatCode(prefix: string, num: number, digits: number): string {
@@ -184,7 +189,7 @@ export class LibraryBookingService {
         const seatId = `${areaId}-${label}`;
         const isDisabled = venue.id === 'studySpace'
           ? (s % 47 === 0)
-          : (s === 5 || s === 18);
+          : (s === 5 || s === 24);
 
         let isBooked = false;
         for (let b = 0; b < bookings.length; b++) {
@@ -229,6 +234,39 @@ export class LibraryBookingService {
       });
     }
     return areas;
+  }
+
+  private static mergeStudySpaceOverviewArea(zoneAreas: ShuYoLibraryArea[]): ShuYoLibraryArea {
+    const mergedSeats: ShuYoLibrarySeat[] = [];
+    let totalFree = 0;
+    for (let i = 0; i < zoneAreas.length; i++) {
+      const area = zoneAreas[i];
+      for (let s = 0; s < area.seats.length; s++) {
+        const seat = area.seats[s];
+        const parsed = LibraryFloorPlanLayout.normalizeSeatCode(seat.seatLabel, area.name);
+        const normalizedLabel = parsed !== undefined
+          ? LibraryFloorPlanLayout.formatNormalizedCode(parsed.prefix, parsed.num)
+          : seat.seatLabel;
+        if (!seat.isDisabled && !seat.isBusy && !seat.isBooked) {
+          totalFree++;
+        }
+        mergedSeats.push({
+          id: seat.id,
+          seatLabel: normalizedLabel,
+          areaId: seat.areaId,
+          isBusy: seat.isBusy,
+          isDisabled: seat.isDisabled,
+          isBooked: seat.isBooked
+        });
+      }
+    }
+    return {
+      id: 'studySpace-all',
+      name: '全馆总览 (A+B+C)',
+      totalCount: mergedSeats.length,
+      freeCount: totalFree,
+      seats: mergedSeats
+    };
   }
 
   private static thereBase(useWebVpn: boolean): string {
@@ -506,6 +544,59 @@ export class LibraryBookingService {
     return out;
   }
 
+  private static async fetchThereSingleAreaSeats(
+    venueId: string,
+    sessionId: string,
+    useWebVpn: boolean,
+    targetArea: ShuYoLibraryArea,
+    day: string,
+    startTime: string,
+    endTime: string,
+    bookings: ShuYoLibraryBookingRecord[]
+  ): Promise<ShuYoLibraryArea | undefined> {
+    const beginParam = encodeURIComponent(`${day} ${startTime}`);
+    const endParam = encodeURIComponent(`${day} ${endTime}`);
+    const areaDetailJson = await LibraryBookingService.thereApiGet(
+      venueId,
+      sessionId,
+      useWebVpn,
+      `/api/v3/booking-status/areas/${encodeURIComponent(targetArea.id)}?begin=${beginParam}&end=${endParam}`
+    );
+    if (areaDetailJson === undefined) {
+      return undefined;
+    }
+    const detailData = JsonHelpers.asObject(areaDetailJson['data']);
+    const rawRooms = JsonHelpers.asArray(detailData !== undefined ? detailData['rooms'] : undefined);
+    const parsedSeats = LibraryBookingService.parseThereRooms(
+      venueId,
+      targetArea.id,
+      rawRooms,
+      day,
+      startTime,
+      endTime,
+      bookings
+    );
+    if (parsedSeats.length === 0) {
+      return undefined;
+    }
+
+    let liveFree = 0;
+    for (let i = 0; i < parsedSeats.length; i++) {
+      const s = parsedSeats[i];
+      if (!s.isDisabled && !s.isBusy && !s.isBooked) {
+        liveFree++;
+      }
+    }
+
+    return {
+      id: targetArea.id,
+      name: targetArea.name,
+      totalCount: parsedSeats.length,
+      freeCount: liveFree,
+      seats: parsedSeats
+    };
+  }
+
   static async fetchAreasAndSeatsForSlot(
     venue: ShuYoLibraryVenue,
     selectedAreaIdx: number,
@@ -516,20 +607,64 @@ export class LibraryBookingService {
     isDemoMode: boolean,
     useWebVpn: boolean
   ): Promise<ShuYoLibrarySlotQueryResult> {
+    const isOverview = venue.id === 'studySpace' && selectedAreaIdx < 0;
     const fallbackAreas = LibraryBookingService.buildAreasForSlot(venue, day, startTime, endTime, bookings);
     const safeIdx = Math.max(0, Math.min(selectedAreaIdx, Math.max(0, fallbackAreas.length - 1)));
-    const fallbackResult: ShuYoLibrarySlotQueryResult = {
-      areas: fallbackAreas,
-      activeArea: fallbackAreas.length > 0 ? fallbackAreas[safeIdx] : undefined,
-      isLive: false,
-      statusText: isDemoMode ? '演示模式 · 按所选时段模拟' : '离线平面图 · 按时段模拟（连接校园网查实时）'
-    };
+    const fallbackActive = isOverview
+      ? LibraryBookingService.mergeStudySpaceOverviewArea(fallbackAreas)
+      : (fallbackAreas.length > 0 ? fallbackAreas[safeIdx] : undefined);
 
     const meta = LibraryBookingService.venueMetaMap.get(venue.id);
-    if (isDemoMode || meta === undefined || !meta.isThere) {
+    const defaultStatus = isDemoMode
+      ? '演示模式 · 按所选时段模拟'
+      : '离线视图 · 按时段模拟（连接校园网查实时）';
+    const fallbackResult: ShuYoLibrarySlotQueryResult = {
+      areas: fallbackAreas,
+      activeArea: fallbackActive,
+      isLive: false,
+      statusText: defaultStatus
+    };
+
+    if (isDemoMode || meta === undefined) {
       return fallbackResult;
     }
     if (!ShuYoCookieJar.hasCookie(ShuYoConstants.ssoBaseUrl, 'SHU_OAUTH2')) {
+      return fallbackResult;
+    }
+
+    if (meta.isChaoxing) {
+      if (day !== LibraryBookingService.todayDateStr()) {
+        return {
+          areas: fallbackAreas,
+          activeArea: fallbackActive,
+          isLive: false,
+          statusText: `${venue.name}超星系统仅支持预约当天 · 当前展示模拟空位`
+        };
+      }
+      try {
+        const cxRes = await ChaoxingBookingService.fetchAreasAndSeats(
+          venue,
+          safeIdx,
+          day,
+          startTime,
+          endTime,
+          bookings
+        );
+        if (cxRes !== undefined) {
+          return {
+            areas: cxRes.areas,
+            activeArea: cxRes.activeArea,
+            isLive: true,
+            statusText: cxRes.statusText
+          };
+        }
+      } catch (_err) {
+        return fallbackResult;
+      }
+      return fallbackResult;
+    }
+
+    if (!meta.isThere) {
       return fallbackResult;
     }
 
@@ -578,49 +713,56 @@ export class LibraryBookingService {
         return fallbackResult;
       }
 
+      if (isOverview) {
+        const hydratedZones = await Promise.all(
+          liveAreas.map((areaItem: ShuYoLibraryArea): Promise<ShuYoLibraryArea | undefined> =>
+            LibraryBookingService.fetchThereSingleAreaSeats(
+              venue.id,
+              sessionId,
+              useWebVpn,
+              areaItem,
+              day,
+              startTime,
+              endTime,
+              bookings
+            )
+          )
+        );
+        const validZones: ShuYoLibraryArea[] = [];
+        for (let i = 0; i < liveAreas.length; i++) {
+          const hz = hydratedZones[i];
+          if (hz !== undefined) {
+            liveAreas[i] = hz;
+            validZones.push(hz);
+          }
+        }
+        if (validZones.length === 0) {
+          return fallbackResult;
+        }
+        const overviewArea = LibraryBookingService.mergeStudySpaceOverviewArea(validZones);
+        return {
+          areas: liveAreas,
+          activeArea: overviewArea,
+          isLive: true,
+          statusText: `实时空位 · 全馆总览（${startTime}-${endTime}）`
+        };
+      }
+
       const targetIdx = Math.max(0, Math.min(selectedAreaIdx, liveAreas.length - 1));
       const targetArea = liveAreas[targetIdx];
-      const beginParam = encodeURIComponent(`${day} ${startTime}`);
-      const endParam = encodeURIComponent(`${day} ${endTime}`);
-      const areaDetailJson = await LibraryBookingService.thereApiGet(
+      const hydratedArea = await LibraryBookingService.fetchThereSingleAreaSeats(
         venue.id,
         sessionId,
         useWebVpn,
-        `/api/v3/booking-status/areas/${encodeURIComponent(targetArea.id)}?begin=${beginParam}&end=${endParam}`
-      );
-      if (areaDetailJson === undefined) {
-        return fallbackResult;
-      }
-      const detailData = JsonHelpers.asObject(areaDetailJson['data']);
-      const rawRooms = JsonHelpers.asArray(detailData !== undefined ? detailData['rooms'] : undefined);
-      const parsedSeats = LibraryBookingService.parseThereRooms(
-        venue.id,
-        targetArea.id,
-        rawRooms,
+        targetArea,
         day,
         startTime,
         endTime,
         bookings
       );
-      if (parsedSeats.length === 0) {
+      if (hydratedArea === undefined) {
         return fallbackResult;
       }
-
-      let liveFree = 0;
-      for (let i = 0; i < parsedSeats.length; i++) {
-        const s = parsedSeats[i];
-        if (!s.isDisabled && !s.isBusy && !s.isBooked) {
-          liveFree++;
-        }
-      }
-
-      const hydratedArea: ShuYoLibraryArea = {
-        id: targetArea.id,
-        name: targetArea.name,
-        totalCount: parsedSeats.length,
-        freeCount: liveFree,
-        seats: parsedSeats
-      };
       liveAreas[targetIdx] = hydratedArea;
 
       return {
@@ -665,6 +807,32 @@ export class LibraryBookingService {
       return {
         ok: true,
         message: `已预约 ${venue.name} ${area.name} ${seat.seatLabel}号（${startTime}-${endTime}）`,
+        record: rec
+      };
+    }
+
+    const meta = LibraryBookingService.venueMetaMap.get(venue.id);
+    if (meta !== undefined && meta.isChaoxing) {
+      const cxSubmit = await ChaoxingBookingService.submitBooking(venue, area, seat, day, startTime, endTime);
+      if (!cxSubmit.ok) {
+        return { ok: false, message: cxSubmit.message };
+      }
+      const rec: ShuYoLibraryBookingRecord = {
+        id: cxSubmit.bookingId,
+        venueId: venue.id,
+        venueName: venue.name,
+        areaId: area.id,
+        areaName: area.name,
+        seatId: seat.id,
+        seatLabel: seat.seatLabel,
+        day: day,
+        beginTime: `${day} ${startTime}`,
+        endTime: `${day} ${endTime}`,
+        status: 'BOOKING'
+      };
+      return {
+        ok: true,
+        message: cxSubmit.message,
         record: rec
       };
     }

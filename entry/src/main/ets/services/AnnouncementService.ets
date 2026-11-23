@@ -21,6 +21,14 @@ interface ParsedMeta {
   department: string;
 }
 
+interface HtmlNode {
+  isText: boolean;
+  tag: string;
+  text: string;
+  attrs: Map<string, string>;
+  children: HtmlNode[];
+}
+
 export class AnnouncementService {
   static readonly filterSources: string[] = [
     '全部',
@@ -62,9 +70,27 @@ export class AnnouncementService {
         if (blk === undefined) {
           continue;
         }
+        const rawRows = JsonHelpers.asArray(blk['rows']);
+        const parsedRows: string[][] = [];
+        for (let r = 0; r < rawRows.length; r++) {
+          const rowArr = JsonHelpers.asArray(rawRows[r]);
+          const rowCells: string[] = [];
+          for (let c = 0; c < rowArr.length; c++) {
+            const cellVal = rowArr[c];
+            rowCells.push(cellVal !== undefined && cellVal !== null ? String(cellVal) : '');
+          }
+          if (rowCells.length > 0) {
+            parsedRows.push(rowCells);
+          }
+        }
+        const altStr = JsonHelpers.str(blk, 'alt', '');
+        const labelStr = JsonHelpers.str(blk, 'label', '');
         blocks.push({
           blockType: JsonHelpers.str(blk, 'type', 'text'),
-          blockValue: JsonHelpers.str(blk, 'value')
+          blockValue: JsonHelpers.str(blk, 'value'),
+          alt: altStr.length > 0 ? altStr : undefined,
+          label: labelStr.length > 0 ? labelStr : undefined,
+          rows: parsedRows.length > 0 ? parsedRows : undefined
         });
       }
       const dept = JsonHelpers.str(detail, 'department', '');
@@ -524,6 +550,292 @@ export class AnnouncementService {
     return items;
   }
 
+  private static readonly htmlVoidTags: Set<string> = new Set<string>([
+    'img', 'br', 'hr', 'input', 'meta', 'link', 'source',
+    'col', 'area', 'base', 'embed', 'param', 'track', 'wbr'
+  ]);
+
+  private static readonly htmlBlockTags: Set<string> = new Set<string>([
+    'div', 'p', 'li', 'ul', 'ol', 'table', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'blockquote', 'section', 'article', 'pre', 'img'
+  ]);
+
+  private static makeHtmlElement(tag: string, attrs: Map<string, string>): HtmlNode {
+    return {
+      isText: false,
+      tag: tag,
+      text: '',
+      attrs: attrs,
+      children: []
+    };
+  }
+
+  private static makeHtmlText(text: string): HtmlNode {
+    return {
+      isText: true,
+      tag: '#text',
+      text: text,
+      attrs: new Map<string, string>(),
+      children: []
+    };
+  }
+
+  private static parseAttributes(attrRaw: string): Map<string, string> {
+    const attrs = new Map<string, string>();
+    const len = attrRaw.length;
+    let i = 0;
+    while (i < len) {
+      while (i < len && AnnouncementService.isSpaceChar(attrRaw.charAt(i))) {
+        i++;
+      }
+      if (i >= len || attrRaw.charAt(i) === '/') {
+        break;
+      }
+      const nameStart = i;
+      while (i < len) {
+        const ch = attrRaw.charAt(i);
+        if (AnnouncementService.isSpaceChar(ch) || ch === '=' || ch === '/' || ch === '>') {
+          break;
+        }
+        i++;
+      }
+      const attrName = attrRaw.substring(nameStart, i).toLowerCase();
+      while (i < len && AnnouncementService.isSpaceChar(attrRaw.charAt(i))) {
+        i++;
+      }
+      let attrVal = '';
+      if (i < len && attrRaw.charAt(i) === '=') {
+        i++;
+        while (i < len && AnnouncementService.isSpaceChar(attrRaw.charAt(i))) {
+          i++;
+        }
+        if (i < len && (attrRaw.charAt(i) === '"' || attrRaw.charAt(i) === "'")) {
+          const quote = attrRaw.charAt(i);
+          i++;
+          const valStart = i;
+          while (i < len && attrRaw.charAt(i) !== quote) {
+            i++;
+          }
+          attrVal = attrRaw.substring(valStart, i);
+          if (i < len) {
+            i++;
+          }
+        } else {
+          const valStart = i;
+          while (i < len && !AnnouncementService.isSpaceChar(attrRaw.charAt(i)) && attrRaw.charAt(i) !== '>') {
+            i++;
+          }
+          attrVal = attrRaw.substring(valStart, i);
+        }
+      }
+      if (attrName.length > 0) {
+        attrs.set(attrName, AnnouncementService.decodeEntities(attrVal).trim());
+      }
+    }
+    return attrs;
+  }
+
+  private static isSpaceChar(ch: string): boolean {
+    return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
+  }
+
+  private static parseHtmlTree(html: string): HtmlNode {
+    const root = AnnouncementService.makeHtmlElement('root', new Map<string, string>());
+    const stack: HtmlNode[] = [root];
+    const len = html.length;
+    let pos = 0;
+
+    while (pos < len) {
+      const lt = html.indexOf('<', pos);
+      if (lt < 0) {
+        if (pos < len) {
+          stack[stack.length - 1].children.push(AnnouncementService.makeHtmlText(html.substring(pos)));
+        }
+        break;
+      }
+      if (lt > pos) {
+        stack[stack.length - 1].children.push(AnnouncementService.makeHtmlText(html.substring(pos, lt)));
+      }
+
+      if (html.startsWith('<!--', lt)) {
+        const endComment = html.indexOf('-->', lt + 4);
+        pos = endComment >= 0 ? endComment + 3 : len;
+        continue;
+      }
+
+      if (html.startsWith('<!', lt) || html.startsWith('<?', lt)) {
+        const gtDecl = html.indexOf('>', lt + 2);
+        pos = gtDecl >= 0 ? gtDecl + 1 : len;
+        continue;
+      }
+
+      const gt = AnnouncementService.findTagClose(html, lt + 1);
+      if (gt < 0) {
+        stack[stack.length - 1].children.push(AnnouncementService.makeHtmlText(html.substring(lt)));
+        break;
+      }
+
+      const tagInside = html.substring(lt + 1, gt).trim();
+      pos = gt + 1;
+      if (tagInside.length === 0) {
+        continue;
+      }
+
+      if (tagInside.startsWith('/')) {
+        const closeTag = tagInside.substring(1).trim().toLowerCase();
+        const spIdx = closeTag.search(new RegExp('\\s'));
+        const closeName = spIdx >= 0 ? closeTag.substring(0, spIdx) : closeTag;
+        for (let s = stack.length - 1; s >= 1; s--) {
+          if (stack[s].tag === closeName) {
+            while (stack.length > s) {
+              stack.pop();
+            }
+            break;
+          }
+        }
+        continue;
+      }
+
+      const selfClosing = tagInside.endsWith('/');
+      const cleanBody = selfClosing ? tagInside.substring(0, tagInside.length - 1).trim() : tagInside;
+      const firstWs = cleanBody.search(new RegExp('\\s'));
+      const tagName = (firstWs >= 0 ? cleanBody.substring(0, firstWs) : cleanBody).toLowerCase();
+      const attrRaw = firstWs >= 0 ? cleanBody.substring(firstWs + 1) : '';
+      if (tagName.length === 0) {
+        continue;
+      }
+
+      // Auto-close messy unclosed table row/cell tags in CMS HTML
+      if (tagName === 'tr') {
+        while (stack.length > 1 && (stack[stack.length - 1].tag === 'td' || stack[stack.length - 1].tag === 'th')) {
+          stack.pop();
+        }
+        if (stack.length > 1 && stack[stack.length - 1].tag === 'tr') {
+          stack.pop();
+        }
+      } else if (tagName === 'td' || tagName === 'th') {
+        while (stack.length > 1 && (stack[stack.length - 1].tag === 'td' || stack[stack.length - 1].tag === 'th')) {
+          stack.pop();
+        }
+      }
+
+      const node = AnnouncementService.makeHtmlElement(tagName, AnnouncementService.parseAttributes(attrRaw));
+      stack[stack.length - 1].children.push(node);
+
+      if (tagName === 'script' || tagName === 'style') {
+        if (!selfClosing) {
+          const closeRe = new RegExp(`<\\/${tagName}\\s*>`, 'i');
+          const restHtml = html.substring(pos);
+          const closeMatch = closeRe.exec(restHtml);
+          if (closeMatch !== null) {
+            const rawCode = restHtml.substring(0, closeMatch.index);
+            if (rawCode.length > 0) {
+              node.children.push(AnnouncementService.makeHtmlText(rawCode));
+            }
+            pos += closeMatch.index + closeMatch[0].length;
+          } else {
+            pos = len;
+          }
+        }
+        continue;
+      }
+
+      if (!selfClosing && !AnnouncementService.htmlVoidTags.has(tagName)) {
+        stack.push(node);
+      }
+    }
+
+    return root;
+  }
+
+  private static findTagClose(html: string, startIdx: number): number {
+    let quote = '';
+    const len = html.length;
+    for (let i = startIdx; i < len; i++) {
+      const ch = html.charAt(i);
+      if (quote.length > 0) {
+        if (ch === quote) {
+          quote = '';
+        }
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === '>') {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private static collectNodesByTag(root: HtmlNode, targetTags: string[], stopAtTag: string = ''): HtmlNode[] {
+    const out: HtmlNode[] = [];
+    const stack: HtmlNode[] = [root];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (cur !== root && !cur.isText && stopAtTag.length > 0 && cur.tag === stopAtTag) {
+        continue;
+      }
+      if (cur !== root && !cur.isText && targetTags.includes(cur.tag)) {
+        out.push(cur);
+      }
+      for (let i = cur.children.length - 1; i >= 0; i--) {
+        stack.push(cur.children[i]);
+      }
+    }
+    return out;
+  }
+
+  private static collectVisibleNodeTextRaw(node: HtmlNode): string {
+    if (node.isText) {
+      return node.text;
+    }
+    if (node.tag === 'script' || node.tag === 'style') {
+      return '';
+    }
+    if (node.tag === 'br') {
+      return ' ';
+    }
+    let combined = '';
+    for (let i = 0; i < node.children.length; i++) {
+      const part = AnnouncementService.collectVisibleNodeTextRaw(node.children[i]);
+      if (part.length > 0) {
+        if (combined.length > 0) {
+          combined += ' ';
+        }
+        combined += part;
+      }
+    }
+    return combined;
+  }
+
+  private static cleanNodeText(node: HtmlNode): string {
+    return AnnouncementService.decodeEntities(AnnouncementService.collectVisibleNodeTextRaw(node))
+      .replace(new RegExp('\\u00a0', 'g'), ' ')
+      .replace(new RegExp('\\s+', 'g'), ' ')
+      .trim();
+  }
+
+  private static hasDescendantTag(node: HtmlNode, tagName: string): boolean {
+    for (let i = 0; i < node.children.length; i++) {
+      const child = node.children[i];
+      if (!child.isText) {
+        if (child.tag === tagName || AnnouncementService.hasDescendantTag(child, tagName)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private static resolveHttpUrl(baseUrl: string, rawUrl: string): string {
+    const trimmed = rawUrl.trim();
+    if (trimmed.length === 0 || trimmed.toLowerCase().startsWith('javascript:')) {
+      return '';
+    }
+    const resolved = HttpClientService.resolveUrl(baseUrl, trimmed);
+    const lower = resolved.toLowerCase();
+    return (lower.startsWith('https://') || lower.startsWith('http://')) ? resolved : '';
+  }
+
   private static parseContentBlocks(
     contentHtml: string,
     pageUrl: string,
@@ -531,70 +843,269 @@ export class AnnouncementService {
   ): ShuYoAnnouncementBlock[] {
     const blocks: ShuYoAnnouncementBlock[] = [];
     const seenLinks = new Set<string>();
+    const seenImages = new Set<string>();
+    const root = AnnouncementService.parseHtmlTree(contentHtml);
 
-    // Remove script & style tags from content fragment
-    const stripped = contentHtml
-      .replace(new RegExp('<!--[\\s\\S]*?-->', 'g'), '')
-      .replace(new RegExp('<script\\b[^>]*>[\\s\\S]*?<\\/script>', 'gi'), '')
-      .replace(new RegExp('<style\\b[^>]*>[\\s\\S]*?<\\/style>', 'gi'), '');
+    const addImage = (imgNode: HtmlNode): void => {
+      const src = imgNode.attrs.get('orisrc') ??
+        imgNode.attrs.get('data-src') ??
+        imgNode.attrs.get('src') ??
+        imgNode.attrs.get('vurl') ??
+        '';
+      const imageUrl = AnnouncementService.resolveHttpUrl(pageUrl, src);
+      if (imageUrl.length === 0 || seenImages.has(imageUrl)) {
+        return;
+      }
+      seenImages.add(imageUrl);
+      const altRaw = imgNode.attrs.get('alt') ?? imgNode.attrs.get('title') ?? '';
+      const altText = AnnouncementService.cleanHtmlText(altRaw);
+      blocks.push({
+        blockType: 'image',
+        blockValue: imageUrl,
+        alt: altText.length > 0 ? altText : undefined
+      });
+    };
 
-    // Extract PDF embeds rendered via showVsbpdfIframe(...)
-    const pdfRe = new RegExp('showVsbpdfIframe\\(\\s*["\']([^"\']+\\.pdf)["\']', 'gi');
-    let pdfMatch = pdfRe.exec(contentHtml);
-    while (pdfMatch !== null) {
-      const pdfUrl = HttpClientService.resolveUrl(pageUrl, pdfMatch[1]);
+    const addLink = (aNode: HtmlNode): void => {
+      const href = aNode.attrs.get('href') ?? '';
+      const linkUrl = AnnouncementService.resolveHttpUrl(pageUrl, href);
+      if (linkUrl.length === 0 || seenLinks.has(linkUrl)) {
+        return;
+      }
+      seenLinks.add(linkUrl);
+      const labelText = AnnouncementService.cleanNodeText(aNode);
+      blocks.push({
+        blockType: 'link',
+        blockValue: linkUrl,
+        label: labelText.length > 0 ? labelText : '查看附件'
+      });
+    };
+
+    // Step A: Scan <script> nodes for showVsbpdfIframe(...) embedded page images & PDF URL
+    const scriptNodes = AnnouncementService.collectNodesByTag(root, ['script']);
+    for (let s = 0; s < scriptNodes.length; s++) {
+      let code = '';
+      for (let c = 0; c < scriptNodes[s].children.length; c++) {
+        code += scriptNodes[s].children[c].text;
+      }
+      const pdfMatch = new RegExp('showVsbpdfIframe\\(\\s*["\']([^"\']+\\.pdf)["\']', 'i').exec(code);
+      if (pdfMatch === null) {
+        continue;
+      }
+      const imgInScriptRe = new RegExp('["\']([^"\']+\\.(?:jpg|jpeg|png))["\']', 'gi');
+      let imgM = imgInScriptRe.exec(code);
+      while (imgM !== null) {
+        const imgUrl = AnnouncementService.resolveHttpUrl(pageUrl, imgM[1]);
+        if (imgUrl.length > 0 && !seenImages.has(imgUrl)) {
+          seenImages.add(imgUrl);
+          blocks.push({
+            blockType: 'image',
+            blockValue: imgUrl,
+            alt: 'PDF 预览页'
+          });
+        }
+        imgM = imgInScriptRe.exec(code);
+      }
+      const pdfUrl = AnnouncementService.resolveHttpUrl(pageUrl, pdfMatch[1]);
       if (pdfUrl.length > 0 && !seenLinks.has(pdfUrl)) {
         seenLinks.add(pdfUrl);
         blocks.push({
           blockType: 'link',
-          blockValue: `查看原始 PDF\n${pdfUrl}`
+          blockValue: pdfUrl,
+          label: '查看原始 PDF'
         });
       }
-      pdfMatch = pdfRe.exec(contentHtml);
     }
 
-    // Parse paragraphs, headings, and list items
-    const blockRe = new RegExp('<(p|li|h2|h3|div)\\b[^>]*>([\\s\\S]*?)<\\/\\1>', 'gi');
-    let bm = blockRe.exec(stripped);
-    while (bm !== null) {
-      const tag = bm[1].toLowerCase();
-      const inner = bm[2];
-      // Avoid double-parsing wrapper divs that contain child <p>/<li>/<div>
-      if (tag === 'div' && new RegExp('<(?:p|li|h2|h3|div|table)\\b', 'i').test(inner)) {
-        bm = blockRe.exec(stripped);
-        continue;
+    // Step B: Recursive document-order DOM visitor
+    const visit = (node: HtmlNode): void => {
+      if (node.isText) {
+        const t = AnnouncementService.decodeEntities(node.text)
+          .replace(new RegExp('\\u00a0', 'g'), ' ')
+          .replace(new RegExp('\\s+', 'g'), ' ')
+          .trim();
+        if (t.length > 0) {
+          blocks.push({ blockType: 'text', blockValue: t });
+        }
+        return;
       }
-      const text = AnnouncementService.cleanHtmlText(inner);
-      if (text.length > 0) {
-        blocks.push({
-          blockType: 'text',
-          blockValue: tag === 'li' ? `• ${text}` : text
-        });
+
+      const tag = node.tag;
+      if (tag === 'script' || tag === 'style') {
+        return;
       }
-      AnnouncementService.collectAttachmentLinks(inner, pageUrl, seenLinks, blocks);
-      bm = blockRe.exec(stripped);
+
+      if (tag === 'table') {
+        const trNodes = AnnouncementService.collectNodesByTag(node, ['tr'], 'table');
+        const rows: string[][] = [];
+        for (let r = 0; r < trNodes.length; r++) {
+          const tr = trNodes[r];
+          const cells: string[] = [];
+          for (let c = 0; c < tr.children.length; c++) {
+            const cellNode = tr.children[c];
+            if (!cellNode.isText && (cellNode.tag === 'td' || cellNode.tag === 'th')) {
+              cells.push(AnnouncementService.cleanNodeText(cellNode));
+            }
+          }
+          if (cells.length === 0) {
+            const deepCells = AnnouncementService.collectNodesByTag(tr, ['td', 'th'], 'table');
+            for (let c = 0; c < deepCells.length; c++) {
+              cells.push(AnnouncementService.cleanNodeText(deepCells[c]));
+            }
+          }
+          let hasNonEmpty = false;
+          for (let c = 0; c < cells.length; c++) {
+            if (cells[c].length > 0) {
+              hasNonEmpty = true;
+              break;
+            }
+          }
+          if (hasNonEmpty) {
+            rows.push(cells);
+          }
+        }
+        if (rows.length > 0) {
+          blocks.push({
+            blockType: 'table',
+            blockValue: '',
+            rows: rows
+          });
+        }
+        const tableImgs = AnnouncementService.collectNodesByTag(node, ['img']);
+        for (let i = 0; i < tableImgs.length; i++) {
+          addImage(tableImgs[i]);
+        }
+        const tableLinks = AnnouncementService.collectNodesByTag(node, ['a']);
+        for (let i = 0; i < tableLinks.length; i++) {
+          addLink(tableLinks[i]);
+        }
+        return;
+      }
+
+      if (tag === 'img') {
+        addImage(node);
+        return;
+      }
+
+      if (tag === 'a') {
+        const imgs = AnnouncementService.collectNodesByTag(node, ['img']);
+        for (let i = 0; i < imgs.length; i++) {
+          addImage(imgs[i]);
+        }
+        addLink(node);
+        return;
+      }
+
+      if (tag === 'p' || tag === 'li' || tag === 'h1' || tag === 'h2' ||
+        tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6' || tag === 'blockquote') {
+        if (AnnouncementService.hasDescendantTag(node, 'table')) {
+          for (let i = 0; i < node.children.length; i++) {
+            visit(node.children[i]);
+          }
+          return;
+        }
+        const text = AnnouncementService.cleanNodeText(node);
+        const anchors = AnnouncementService.collectNodesByTag(node, ['a']);
+        const onlySingleLinkText = anchors.length === 1 &&
+          AnnouncementService.cleanNodeText(anchors[0]) === text;
+        if (text.length > 0 && !onlySingleLinkText) {
+          blocks.push({
+            blockType: 'text',
+            blockValue: tag === 'li' ? `• ${text}` : text
+          });
+        }
+        const imgs = AnnouncementService.collectNodesByTag(node, ['img']);
+        for (let i = 0; i < imgs.length; i++) {
+          addImage(imgs[i]);
+        }
+        for (let i = 0; i < anchors.length; i++) {
+          addLink(anchors[i]);
+        }
+        return;
+      }
+
+      // Container / wrapper / inline elements
+      let hasElementChild = false;
+      for (let i = 0; i < node.children.length; i++) {
+        if (!node.children[i].isText) {
+          hasElementChild = true;
+          break;
+        }
+      }
+      if (!hasElementChild) {
+        const leafText = AnnouncementService.cleanNodeText(node);
+        if (leafText.length > 0) {
+          blocks.push({ blockType: 'text', blockValue: leafText });
+        }
+        return;
+      }
+
+      // Group consecutive inline/text runs separately from nested block children
+      let inlineGroup: HtmlNode[] = [];
+      const flushInlineGroup = (): void => {
+        if (inlineGroup.length === 0) {
+          return;
+        }
+        const wrapper = AnnouncementService.makeHtmlElement('span', new Map<string, string>());
+        wrapper.children = inlineGroup;
+        inlineGroup = [];
+        const text = AnnouncementService.cleanNodeText(wrapper);
+        const anchors = AnnouncementService.collectNodesByTag(wrapper, ['a']);
+        const onlySingleLink = anchors.length === 1 &&
+          AnnouncementService.cleanNodeText(anchors[0]) === text;
+        if (text.length > 0 && !onlySingleLink) {
+          blocks.push({ blockType: 'text', blockValue: text });
+        }
+        const imgs = AnnouncementService.collectNodesByTag(wrapper, ['img']);
+        for (let k = 0; k < imgs.length; k++) {
+          addImage(imgs[k]);
+        }
+        for (let k = 0; k < anchors.length; k++) {
+          addLink(anchors[k]);
+        }
+      };
+
+      for (let i = 0; i < node.children.length; i++) {
+        const child = node.children[i];
+        const isBlockLike = !child.isText &&
+          (AnnouncementService.htmlBlockTags.has(child.tag) ||
+            AnnouncementService.hasDescendantTag(child, 'table') ||
+            AnnouncementService.hasDescendantTag(child, 'img'));
+        if (isBlockLike) {
+          flushInlineGroup();
+          visit(child);
+        } else {
+          inlineGroup.push(child);
+        }
+      }
+      flushInlineGroup();
+    };
+
+    for (let i = 0; i < root.children.length; i++) {
+      visit(root.children[i]);
     }
 
-    if (blocks.length === 0 && stripped.length > 0) {
-      const plain = AnnouncementService.cleanHtmlText(stripped);
+    // Step C: Fallbacks + full-document VSB attachment scan
+    if (blocks.length === 0) {
+      const plain = AnnouncementService.cleanNodeText(root);
       if (plain.length > 0) {
         blocks.push({ blockType: 'text', blockValue: plain });
       }
     }
 
-    // Also scan full document for VSB DownloadAttachUrl attachment links
     const attachRe = new RegExp('<a\\b([^>]*)>([\\s\\S]*?)<\\/a>', 'gi');
     let am = attachRe.exec(fullHtml);
     while (am !== null) {
       const href = AnnouncementService.extractAttr(am[1], 'href');
       if (href.includes('DownloadAttachUrl')) {
-        const resolved = HttpClientService.resolveUrl(pageUrl, href);
+        const resolved = AnnouncementService.resolveHttpUrl(pageUrl, href);
         if (resolved.length > 0 && !seenLinks.has(resolved)) {
           seenLinks.add(resolved);
           const label = AnnouncementService.cleanHtmlText(am[2]);
           blocks.push({
             blockType: 'link',
-            blockValue: `${label.length > 0 ? label : '查看附件'}\n${resolved}`
+            blockValue: resolved,
+            label: label.length > 0 ? label : '查看附件'
           });
         }
       }
@@ -604,48 +1115,11 @@ export class AnnouncementService {
     if (blocks.length === 0) {
       blocks.push({
         blockType: 'link',
-        blockValue: `原文链接\n${pageUrl}`
+        blockValue: pageUrl,
+        label: '原文链接'
       });
     }
     return blocks;
-  }
-
-  private static collectAttachmentLinks(
-    fragment: string,
-    pageUrl: string,
-    seenLinks: Set<string>,
-    outBlocks: ShuYoAnnouncementBlock[]
-  ): void {
-    const aRe = new RegExp('<a\\b([^>]*)>([\\s\\S]*?)<\\/a>', 'gi');
-    let am = aRe.exec(fragment);
-    while (am !== null) {
-      const href = AnnouncementService.extractAttr(am[1], 'href');
-      const lower = href.toLowerCase();
-      if (href.length > 0 && !lower.startsWith('javascript:')) {
-        const isAttachment = lower.includes('downloadattachurl') ||
-          lower.endsWith('.pdf') ||
-          lower.endsWith('.doc') ||
-          lower.endsWith('.docx') ||
-          lower.endsWith('.xls') ||
-          lower.endsWith('.xlsx') ||
-          lower.endsWith('.ppt') ||
-          lower.endsWith('.pptx') ||
-          lower.endsWith('.zip') ||
-          lower.endsWith('.rar');
-        if (isAttachment) {
-          const resolved = HttpClientService.resolveUrl(pageUrl, href);
-          if (resolved.length > 0 && !seenLinks.has(resolved)) {
-            seenLinks.add(resolved);
-            const label = AnnouncementService.cleanHtmlText(am[2]);
-            outBlocks.push({
-              blockType: 'link',
-              blockValue: `${label.length > 0 ? label : '查看附件'}\n${resolved}`
-            });
-          }
-        }
-      }
-      am = aRe.exec(fragment);
-    }
   }
 
   private static parseDetailMetadata(metaHtml: string): ParsedMeta {

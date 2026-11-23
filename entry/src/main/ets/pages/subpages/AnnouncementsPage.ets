@@ -10,6 +10,110 @@ export function AnnouncementsPageBuilder(): void {
 }
 
 @ComponentV2
+struct AnnouncementTableView {
+  @Param rows: string[][] = [];
+  @Param cellSurfaceColor: string = '#FFFFFF';
+  @Param headerBgColor: string = '#F8FAFC';
+  @Param lineBorderColor: string = '#E2E8F0';
+  @Param cellTextColor: string = '#0F172A';
+  @Param captionMutedColor: string = '#64748B';
+
+  @Local colWidths: number[] = [];
+  @Local totalWidth: number = 0;
+
+  aboutToAppear(): void {
+    this.recomputeMetrics();
+  }
+
+  @Monitor('rows')
+  onRowsChanged(): void {
+    this.recomputeMetrics();
+  }
+
+  private recomputeMetrics(): void {
+    let maxCols = 0;
+    for (let r = 0; r < this.rows.length; r++) {
+      if (this.rows[r].length > maxCols) {
+        maxCols = this.rows[r].length;
+      }
+    }
+    if (maxCols <= 0) {
+      this.colWidths = [];
+      this.totalWidth = 0;
+      return;
+    }
+    const widths: number[] = [];
+    let sum = 0;
+    for (let c = 0; c < maxCols; c++) {
+      let maxUnits = 4;
+      for (let r = 0; r < this.rows.length; r++) {
+        const cell = c < this.rows[r].length ? this.rows[r][c] : '';
+        let units = 0;
+        for (let k = 0; k < cell.length; k++) {
+          units += cell.charCodeAt(k) > 255 ? 2 : 1;
+        }
+        if (units > maxUnits) {
+          maxUnits = units;
+        }
+      }
+      const w = Math.max(78, Math.min(220, Math.round(20 + maxUnits * 7.2)));
+      widths.push(w);
+      sum += w;
+    }
+    this.colWidths = widths;
+    this.totalWidth = sum;
+  }
+
+  build() {
+    Column({ space: 4 }) {
+      Scroll() {
+        Column() {
+          ForEach(this.rows, (row: string[], rIdx: number) => {
+            Row() {
+              ForEach(this.colWidths, (colW: number, cIdx: number) => {
+                Text(cIdx < row.length && row[cIdx].length > 0 ? row[cIdx] : ' ')
+                  .width(colW)
+                  .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+                  .fontSize(12.5)
+                  .lineHeight(18)
+                  .fontWeight(rIdx === 0 && this.rows.length > 1 ? FontWeight.Medium : FontWeight.Normal)
+                  .fontColor(this.cellTextColor)
+                  .copyOption(CopyOptions.LocalDevice)
+                  .border({
+                    width: { right: cIdx < this.colWidths.length - 1 ? 1 : 0 },
+                    color: this.lineBorderColor
+                  })
+              }, (colW: number, cIdx: number): string => `col-${rIdx}-${cIdx}-${colW}`)
+            }
+            .alignItems(VerticalAlign.Top)
+            .backgroundColor(rIdx === 0 && this.rows.length > 1 ? this.headerBgColor : this.cellSurfaceColor)
+            .border({
+              width: { bottom: rIdx < this.rows.length - 1 ? 1 : 0 },
+              color: this.lineBorderColor
+            })
+          }, (row: string[], rIdx: number): string => `row-${rIdx}-${row.length}`)
+        }
+        .alignItems(HorizontalAlign.Start)
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Auto)
+      .width('100%')
+      .borderRadius(10)
+      .border({ width: 1, color: this.lineBorderColor })
+      .backgroundColor(this.cellSurfaceColor)
+
+      if (this.totalWidth > 300) {
+        Text('← 左右滑动查看完整表格 →')
+          .fontSize(11)
+          .fontColor(this.captionMutedColor)
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+}
+
+@ComponentV2
 export struct AnnouncementsPage {
   @Local navStack: NavPathStack = new NavPathStack();
   @Local items: ShuYoAnnouncementItem[] = [];
@@ -17,6 +121,8 @@ export struct AnnouncementsPage {
   @Local searchKeyword: string = '';
   @Local selectedDetail: ShuYoAnnouncementItem | undefined = undefined;
   @Local showDetailSheet: boolean = false;
+  @Local previewImageUrl: string = '';
+  @Local showImagePreview: boolean = false;
   @Local isLoading: boolean = false;
   @Local isLoadingDetail: boolean = false;
   @Local errorMessage: string = '';
@@ -165,14 +271,79 @@ export struct AnnouncementsPage {
     return this.selectedSource === label ? this.store.colors.onSelectedFill : this.store.colors.textSecondary;
   }
 
-  private getLinkLabel(val: string): string {
-    const idx = val.indexOf('\n');
-    return idx >= 0 ? val.substring(0, idx) : '查看附件 / 原文';
+  private getLinkLabel(blk: ShuYoAnnouncementBlock): string {
+    if (blk.label !== undefined && blk.label.length > 0) {
+      return blk.label;
+    }
+    const idx = blk.blockValue.indexOf('\n');
+    return idx >= 0 ? blk.blockValue.substring(0, idx) : '查看附件 / 原文';
   }
 
-  private getLinkUrl(val: string): string {
-    const idx = val.indexOf('\n');
-    return idx >= 0 ? val.substring(idx + 1) : val;
+  private getLinkUrl(blk: ShuYoAnnouncementBlock): string {
+    const idx = blk.blockValue.indexOf('\n');
+    return idx >= 0 ? blk.blockValue.substring(idx + 1) : blk.blockValue;
+  }
+
+  @Builder
+  private imageBlockView(blk: ShuYoAnnouncementBlock) {
+    Column({ space: 6 }) {
+      Image(blk.blockValue)
+        .width('100%')
+        .constraintSize({ minHeight: 100, maxHeight: 420 })
+        .objectFit(ImageFit.Contain)
+        .borderRadius(10)
+        .backgroundColor(this.store.colors.surfaceAlt)
+        .onClick(() => {
+          this.previewImageUrl = blk.blockValue;
+          this.showImagePreview = true;
+        })
+      if (blk.alt !== undefined && blk.alt.length > 0) {
+        Text(blk.alt)
+          .fontSize(11)
+          .fontColor(this.store.colors.textMuted)
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  private imagePreviewSheetBuilder() {
+    Column({ space: 12 }) {
+      Row() {
+        Text('图片预览')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.store.colors.textPrimary)
+          .layoutWeight(1)
+        if (this.previewImageUrl.length > 0) {
+          Button('浏览器打开原图')
+            .height(28)
+            .fontSize(11)
+            .fontColor(this.store.colors.accent)
+            .backgroundColor(this.store.colors.accentSoft)
+            .borderRadius(14)
+            .padding({ left: 10, right: 10 })
+            .onClick(() => {
+              NativeSystemService.openExternalUrl(this.previewImageUrl, this.getUIContext());
+            })
+        }
+      }
+      .width('100%')
+
+      if (this.previewImageUrl.length > 0) {
+        Image(this.previewImageUrl)
+          .width('100%')
+          .layoutWeight(1)
+          .objectFit(ImageFit.Contain)
+          .borderRadius(12)
+          .backgroundColor(this.store.colors.surfaceAlt)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 16, right: 16, top: 8, bottom: 24 })
+    .backgroundColor(this.store.colors.surface)
   }
 
   @Builder
@@ -282,17 +453,28 @@ export struct AnnouncementsPage {
           }
 
           ForEach(this.selectedDetail.blocks, (blk: ShuYoAnnouncementBlock, idx: number) => {
-            if (blk.blockType === 'link') {
+            if (blk.blockType === 'table' && blk.rows !== undefined && blk.rows.length > 0) {
+              AnnouncementTableView({
+                rows: blk.rows,
+                cellSurfaceColor: this.store.colors.surface,
+                headerBgColor: this.store.colors.surfaceAlt,
+                lineBorderColor: this.store.colors.border,
+                cellTextColor: this.store.colors.textPrimary,
+                captionMutedColor: this.store.colors.textMuted
+              })
+            } else if (blk.blockType === 'image' && blk.blockValue.length > 0) {
+              this.imageBlockView(blk)
+            } else if (blk.blockType === 'link') {
               Row({ space: 8 }) {
                 SymbolGlyph($r('sys.symbol.paperclip'))
                   .fontSize(16)
                   .fontColor([this.store.colors.accent])
                 Column({ space: 2 }) {
-                  Text(this.getLinkLabel(blk.blockValue))
+                  Text(this.getLinkLabel(blk))
                     .fontSize(13)
                     .fontWeight(FontWeight.Medium)
                     .fontColor(this.store.colors.accent)
-                  Text(this.getLinkUrl(blk.blockValue))
+                  Text(this.getLinkUrl(blk))
                     .fontSize(11)
                     .fontColor(this.store.colors.textMuted)
                     .maxLines(1)
@@ -309,13 +491,14 @@ export struct AnnouncementsPage {
               .borderRadius(10)
               .backgroundColor(this.store.colors.accentSoft)
               .onClick(() => {
-                NativeSystemService.openExternalUrl(this.getLinkUrl(blk.blockValue), this.getUIContext());
+                NativeSystemService.openExternalUrl(this.getLinkUrl(blk), this.getUIContext());
               })
             } else {
               Text(blk.blockValue)
                 .fontSize(14)
                 .lineHeight(22)
                 .fontColor(this.store.colors.textPrimary)
+                .copyOption(CopyOptions.LocalDevice)
                 .width('100%')
             }
           }, (blk: ShuYoAnnouncementBlock, idx: number): string => `blk-${idx}-${blk.blockType}`)
@@ -326,6 +509,11 @@ export struct AnnouncementsPage {
       .alignItems(HorizontalAlign.Start)
     }
     .backgroundColor(this.store.colors.surface)
+    .bindSheet($$this.showImagePreview, this.imagePreviewSheetBuilder(), {
+      height: SheetSize.LARGE,
+      dragBar: true,
+      showClose: true
+    })
   }
 
   build() {

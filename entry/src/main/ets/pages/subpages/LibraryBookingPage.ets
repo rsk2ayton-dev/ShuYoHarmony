@@ -1,3 +1,4 @@
+import { LengthMetrics } from '@kit.ArkUI';
 import {
   ShuYoLibraryArea,
   ShuYoLibraryBookingRecord,
@@ -5,6 +6,11 @@ import {
   ShuYoLibraryVenue
 } from '../../models/ShuYoModels';
 import { LibraryBookingService } from '../../services/LibraryBookingService';
+import {
+  LibraryFloorPlanLayout,
+  ShuYoFloorPlanPoint,
+  ShuYoSeatNeighborSummary
+} from '../../services/LibraryFloorPlanLayout';
 import { LibraryFloorPlanView } from '../../components/LibraryFloorPlanView';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoEmptyState, ShuYoTopBar } from '../../components/ShuYoCommonViews';
@@ -18,20 +24,24 @@ export function LibraryBookingPageBuilder(): void {
 export struct LibraryBookingPage {
   @Local navStack: NavPathStack = new NavPathStack();
   @Local selectedVenueIdx: number = 0;
-  @Local selectedAreaIdx: number = 0;
+  @Local selectedAreaIdx: number = -1; // -1 = 全馆总览 (studySpace only), >=0 = specific zone
   @Local activeTabMode: number = 0; // 0: 平面图选座, 1: 我的预约, 2: 说明与规则
   @Local displayMode: number = 0; // 0: 交互平面图, 1: 座位列表
   @Local selectedDay: string = LibraryBookingService.todayDateStr();
   @Local selectedStartTime: string = '09:00';
   @Local selectedEndTime: string = '12:00';
-  @Local onlyShowAvailable: boolean = false;
+  @Local filterMode: number = 0; // 0: 全部, 1: 仅空闲, 2: 清静位(邻座皆空)
   @Local areas: ShuYoLibraryArea[] = [];
+  @Local activeArea: ShuYoLibraryArea | undefined = undefined;
+  @Local areaPoints: ShuYoFloorPlanPoint[] = [];
+  @Local pointMap: Map<string, ShuYoFloorPlanPoint> = new Map<string, ShuYoFloorPlanPoint>();
+  @Local quietCount: number = 0;
   @Local isLiveMode: boolean = false;
   @Local dataStatusText: string = '正在加载座位分布...';
   @Local isLoadingSeats: boolean = false;
   @Local isSubmittingBooking: boolean = false;
   @Local selectedSeatId: string = '';
-  @Local selectedSeatZoneHint: string = '';
+  @Local selectedPoint: ShuYoFloorPlanPoint | undefined = undefined;
   @Local showFullScreenMapSheet: boolean = false;
   @Local floorRevision: number = 0;
 
@@ -41,6 +51,7 @@ export struct LibraryBookingPage {
   private readonly tomorrowStr: string = LibraryBookingService.tomorrowDateStr();
 
   aboutToAppear(): void {
+    this.selectedAreaIdx = this.getCurrentVenue().id === 'studySpace' ? -1 : 0;
     this.reloadSeatAvailability();
   }
 
@@ -50,6 +61,9 @@ export struct LibraryBookingPage {
   }
 
   private getCurrentArea(): ShuYoLibraryArea | undefined {
+    if (this.activeArea !== undefined) {
+      return this.activeArea;
+    }
     if (this.areas.length === 0) {
       return undefined;
     }
@@ -57,7 +71,37 @@ export struct LibraryBookingPage {
     return this.areas[idx];
   }
 
+  private isOverviewAvailable(): boolean {
+    return this.getCurrentVenue().id === 'studySpace';
+  }
+
+  private getOverviewSummaryLabel(): string {
+    let freeSum = 0;
+    let totalSum = 0;
+    for (let i = 0; i < this.areas.length; i++) {
+      freeSum += this.areas[i].freeCount;
+      totalSum += this.areas[i].totalCount;
+    }
+    if (totalSum <= 0 && this.activeArea !== undefined) {
+      freeSum = this.activeArea.freeCount;
+      totalSum = this.activeArea.totalCount;
+    }
+    return totalSum > 0 ? `全馆总览 (空${freeSum}/${totalSum})` : '全馆总览 (A+B+C)';
+  }
+
+  private resolveBookingAreaForSeat(seat: ShuYoLibrarySeat): ShuYoLibraryArea | undefined {
+    for (let i = 0; i < this.areas.length; i++) {
+      if (this.areas[i].id === seat.areaId) {
+        return this.areas[i];
+      }
+    }
+    return this.getCurrentArea();
+  }
+
   private findSelectedSeat(): ShuYoLibrarySeat | undefined {
+    if (this.selectedPoint !== undefined) {
+      return this.selectedPoint.seat;
+    }
     if (this.selectedSeatId.length === 0) {
       return undefined;
     }
@@ -71,6 +115,42 @@ export struct LibraryBookingPage {
       }
     }
     return undefined;
+  }
+
+  private rebuildAreaPoints(): void {
+    const area = this.getCurrentArea();
+    if (area === undefined) {
+      this.areaPoints = [];
+      this.pointMap = new Map<string, ShuYoFloorPlanPoint>();
+      this.quietCount = 0;
+      return;
+    }
+    const pts = LibraryFloorPlanLayout.buildFloorPlanPoints(
+      this.getCurrentVenue().id,
+      area.name,
+      area.seats
+    );
+    const map = new Map<string, ShuYoFloorPlanPoint>();
+    let quiet = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const pt = pts[i];
+      map.set(pt.seat.id, pt);
+      if (pt.isQuiet) {
+        quiet++;
+      }
+    }
+    this.areaPoints = pts;
+    this.pointMap = map;
+    this.quietCount = quiet;
+    if (this.selectedSeatId.length > 0) {
+      const refreshed = map.get(this.selectedSeatId);
+      if (refreshed !== undefined) {
+        this.selectedPoint = refreshed;
+      } else {
+        this.selectedSeatId = '';
+        this.selectedPoint = undefined;
+      }
+    }
   }
 
   private async reloadSeatAvailability(): Promise<void> {
@@ -91,13 +171,23 @@ export struct LibraryBookingPage {
       return;
     }
     this.areas = res.areas;
+    if (venue.id !== 'studySpace' && this.selectedAreaIdx < 0) {
+      this.selectedAreaIdx = 0;
+    }
     if (this.areas.length > 0 && this.selectedAreaIdx >= this.areas.length) {
       this.selectedAreaIdx = 0;
     }
+    this.activeArea = res.activeArea;
     this.isLiveMode = res.isLive;
     this.dataStatusText = res.statusText;
+    this.rebuildAreaPoints();
     this.isLoadingSeats = false;
     this.floorRevision++;
+  }
+
+  private clearSelection(): void {
+    this.selectedSeatId = '';
+    this.selectedPoint = undefined;
   }
 
   private applyPresetSlot(start: string, end: string): void {
@@ -106,8 +196,7 @@ export struct LibraryBookingPage {
     }
     this.selectedStartTime = start;
     this.selectedEndTime = end;
-    this.selectedSeatId = '';
-    this.selectedSeatZoneHint = '';
+    this.clearSelection();
     this.reloadSeatAvailability();
   }
 
@@ -121,8 +210,7 @@ export struct LibraryBookingPage {
     const nextEnd = curEndIdx >= minEnd ? curEndIdx : Math.min(opts.length - 1, nextStart + 2);
     this.selectedStartTime = opts[nextStart];
     this.selectedEndTime = opts[nextEnd];
-    this.selectedSeatId = '';
-    this.selectedSeatZoneHint = '';
+    this.clearSelection();
     this.reloadSeatAvailability();
   }
 
@@ -133,20 +221,37 @@ export struct LibraryBookingPage {
     const baseEnd = curEndIdx >= 0 ? curEndIdx : curStartIdx + 2;
     const nextEnd = Math.max(curStartIdx + 1, Math.min(opts.length - 1, baseEnd + delta));
     this.selectedEndTime = opts[nextEnd];
-    this.selectedSeatId = '';
-    this.selectedSeatZoneHint = '';
+    this.clearSelection();
     this.reloadSeatAvailability();
   }
 
-  private handleSeatSelected(seat: ShuYoLibrarySeat, zoneHint: string): void {
-    if (this.selectedSeatId === seat.id) {
-      this.selectedSeatId = '';
-      this.selectedSeatZoneHint = '';
+  private handlePointSelected(pt: ShuYoFloorPlanPoint): void {
+    if (this.selectedSeatId === pt.seat.id) {
+      this.clearSelection();
     } else {
-      this.selectedSeatId = seat.id;
-      this.selectedSeatZoneHint = zoneHint;
+      this.selectedSeatId = pt.seat.id;
+      this.selectedPoint = pt;
     }
     this.floorRevision++;
+  }
+
+  private handleSeatSelectedFromList(seat: ShuYoLibrarySeat): void {
+    const existing = this.pointMap.get(seat.id);
+    if (existing !== undefined) {
+      this.handlePointSelected(existing);
+      return;
+    }
+    const fallbackPt: ShuYoFloorPlanPoint = {
+      seat: seat,
+      normalizedCode: seat.seatLabel,
+      nx: 0.5,
+      ny: 0.5,
+      facingDeg: -90,
+      zoneHint: `${this.getCurrentArea()?.name ?? ''} ${seat.seatLabel}号`,
+      isQuiet: LibraryFloorPlanLayout.isSeatFree(seat),
+      isRealFloorPlan: false
+    };
+    this.handlePointSelected(fallbackPt);
   }
 
   private getTabBg(idx: number): string {
@@ -157,21 +262,38 @@ export struct LibraryBookingPage {
     return this.activeTabMode === idx ? this.store.colors.onSelectedFill : this.store.colors.textSecondary;
   }
 
-  private getDisplayedListSeats(area: ShuYoLibraryArea): ShuYoLibrarySeat[] {
-    if (!this.onlyShowAvailable) {
-      return area.seats;
+  private getFilterBg(mode: number): string {
+    if (this.filterMode !== mode) {
+      return this.store.colors.chipFill;
     }
-    const out: ShuYoLibrarySeat[] = [];
-    for (let i = 0; i < area.seats.length; i++) {
-      const s = area.seats[i];
-      if (!s.isDisabled && !s.isBusy && !s.isBooked) {
-        out.push(s);
+    return mode === 2 ? '#059669' : (mode === 1 ? '#16A34A' : this.store.colors.selectedFill);
+  }
+
+  private getFilterText(mode: number): string {
+    if (this.filterMode !== mode) {
+      return this.store.colors.textSecondary;
+    }
+    return mode === 0 ? this.store.colors.onSelectedFill : '#FFFFFF';
+  }
+
+  private getDisplayedListPoints(): ShuYoFloorPlanPoint[] {
+    if (this.filterMode === 0) {
+      return this.areaPoints;
+    }
+    const out: ShuYoFloorPlanPoint[] = [];
+    for (let i = 0; i < this.areaPoints.length; i++) {
+      const pt = this.areaPoints[i];
+      if (this.filterMode === 1 && LibraryFloorPlanLayout.isSeatFree(pt.seat)) {
+        out.push(pt);
+      } else if (this.filterMode === 2 && pt.isQuiet) {
+        out.push(pt);
       }
     }
     return out;
   }
 
-  private getSeatCardBg(seat: ShuYoLibrarySeat): string {
+  private getSeatCardBg(pt: ShuYoFloorPlanPoint): string {
+    const seat = pt.seat;
     if (seat.isDisabled) {
       return this.store.colors.disabledFill;
     }
@@ -181,7 +303,7 @@ export struct LibraryBookingPage {
     if (seat.isBusy) {
       return '#FEE2E2';
     }
-    return '#DCFCE7';
+    return pt.isQuiet ? '#D1FAE5' : '#DCFCE7';
   }
 
   private getSeatCardBorder(seat: ShuYoLibrarySeat): string {
@@ -230,11 +352,29 @@ export struct LibraryBookingPage {
     return !seat.isDisabled && !seat.isBusy && !seat.isBooked;
   }
 
+  private buildMatrixNeighborText(pt: ShuYoFloorPlanPoint): string {
+    const parts: string[] = [];
+    if (pt.leftNeighbor !== undefined) {
+      parts.push(`连号前位 ${pt.leftNeighbor.label} ${pt.leftNeighbor.statusText}`);
+    }
+    if (pt.rightNeighbor !== undefined) {
+      parts.push(`连号后位 ${pt.rightNeighbor.label} ${pt.rightNeighbor.statusText}`);
+    }
+    if (parts.length === 0) {
+      return '暂无连号相邻席位信息（以现场桌位为准）';
+    }
+    return `${parts.join(' · ')}（以现场桌位为准）`;
+  }
+
   private async confirmBookSelectedSeat(): Promise<void> {
-    const area = this.getCurrentArea();
     const seat = this.findSelectedSeat();
-    if (area === undefined || seat === undefined) {
+    if (seat === undefined) {
       this.getUIContext().getPromptAction().showToast({ message: '请先在平面图中选择一个座位' });
+      return;
+    }
+    const targetArea = this.resolveBookingAreaForSeat(seat);
+    if (targetArea === undefined) {
+      this.getUIContext().getPromptAction().showToast({ message: '未定位到该座位所属分区，请刷新后重试' });
       return;
     }
     if (!this.isSeatBookable(seat)) {
@@ -252,7 +392,7 @@ export struct LibraryBookingPage {
     try {
       const res = await LibraryBookingService.createBooking(
         this.getCurrentVenue(),
-        area,
+        targetArea,
         seat,
         this.selectedDay,
         this.selectedStartTime,
@@ -283,6 +423,113 @@ export struct LibraryBookingPage {
   }
 
   @Builder
+  private neighborStatusChip(prefix: string, summary: ShuYoSeatNeighborSummary) {
+    Text(`${prefix} ${summary.label} ${summary.statusText}`)
+      .fontSize(11)
+      .fontWeight(FontWeight.Medium)
+      .fontColor(summary.isFree ? '#15803D' : '#B91C1C')
+      .backgroundColor(summary.isFree ? '#DCFCE7' : '#FEE2E2')
+      .borderRadius(8)
+      .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+  }
+
+  @Builder
+  private cinemaTicketSelectionCard(pt: ShuYoFloorPlanPoint, compact: boolean) {
+    Column({ space: 8 }) {
+      Row({ space: 10 }) {
+        Column({ space: 3 }) {
+          Row({ space: 6 }) {
+            Text(pt.normalizedCode)
+              .fontSize(compact ? 16 : 17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.store.colors.textPrimary)
+
+            if (pt.isQuiet) {
+              Text('✨ 邻座皆空')
+                .fontSize(10.5)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#065F46')
+                .backgroundColor('#D1FAE5')
+                .borderRadius(8)
+                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            } else if (this.isSeatBookable(pt.seat) && (pt.leftNeighbor !== undefined || pt.rightNeighbor !== undefined)) {
+              Text('邻座有人')
+                .fontSize(10.5)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#92400E')
+                .backgroundColor('#FEF3C7')
+                .borderRadius(8)
+                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            }
+
+            Text(this.getSeatStatusLabel(pt.seat))
+              .fontSize(10.5)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.getSeatCardText(pt.seat))
+          }
+
+          Text(`${pt.zoneHint} · ${this.selectedDay} ${this.selectedStartTime}-${this.selectedEndTime}`)
+            .fontSize(11.5)
+            .fontColor(this.store.colors.textTertiary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        Button(this.isSubmittingBooking
+          ? '提交中...'
+          : (this.isSeatBookable(pt.seat) ? '预约此座' : '不可预约'))
+          .height(36)
+          .fontSize(13)
+          .enabled(this.isSeatBookable(pt.seat) && !this.isSubmittingBooking)
+          .fontColor(this.store.colors.onAccent)
+          .backgroundColor(
+            this.isSeatBookable(pt.seat)
+              ? '#16A34A'
+              : this.store.colors.disabledFill
+          )
+          .borderRadius(10)
+          .padding({ left: 14, right: 14 })
+          .onClick(() => {
+            this.confirmBookSelectedSeat();
+          })
+      }
+      .width('100%')
+
+      if (pt.isRealFloorPlan) {
+        if (pt.leftNeighbor !== undefined || pt.rightNeighbor !== undefined || pt.oppositeNeighbor !== undefined) {
+          Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(6), cross: LengthMetrics.vp(6) } }) {
+            if (pt.leftNeighbor !== undefined) {
+              this.neighborStatusChip('左邻', pt.leftNeighbor)
+            }
+            if (pt.rightNeighbor !== undefined) {
+              this.neighborStatusChip('右邻', pt.rightNeighbor)
+            }
+            if (pt.oppositeNeighbor !== undefined) {
+              this.neighborStatusChip('对面', pt.oppositeNeighbor)
+            }
+          }
+          .width('100%')
+        } else {
+          Text('独立圆台席位 · 无贴靠邻座')
+            .fontSize(11)
+            .fontColor('#059669')
+        }
+      } else {
+        Text(this.buildMatrixNeighborText(pt))
+          .fontSize(11)
+          .fontColor(this.store.colors.textSecondary)
+      }
+    }
+    .width('100%')
+    .padding(compact ? 12 : 14)
+    .borderRadius(14)
+    .backgroundColor(compact ? this.store.colors.surfaceAlt : this.store.colors.surface)
+    .border({ width: 1.5, color: this.getSeatCardBorder(pt.seat) })
+  }
+
+  @Builder
   private fullScreenMapSheetBuilder() {
     Column({ space: 12 }) {
       Row() {
@@ -291,12 +538,50 @@ export struct LibraryBookingPage {
             .fontSize(17)
             .fontWeight(FontWeight.Bold)
             .fontColor(this.store.colors.textPrimary)
-          Text(`${this.selectedDay} ${this.selectedStartTime}-${this.selectedEndTime} · 绿=空闲 / 红=占用`)
+          Text(`${this.selectedDay} ${this.selectedStartTime}-${this.selectedEndTime} · 空${this.getCurrentArea()?.freeCount ?? 0} / 清静${this.quietCount}`)
             .fontSize(12)
             .fontColor(this.store.colors.textTertiary)
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
+      }
+      .width('100%')
+
+      // Filter strip in full-screen sheet too
+      Row({ space: 6 }) {
+        Button('全部')
+          .height(28)
+          .fontSize(11)
+          .fontColor(this.getFilterText(0))
+          .backgroundColor(this.getFilterBg(0))
+          .borderRadius(12)
+          .padding({ left: 10, right: 10 })
+          .onClick(() => {
+            this.filterMode = 0;
+            this.floorRevision++;
+          })
+        Button('仅空闲')
+          .height(28)
+          .fontSize(11)
+          .fontColor(this.getFilterText(1))
+          .backgroundColor(this.getFilterBg(1))
+          .borderRadius(12)
+          .padding({ left: 10, right: 10 })
+          .onClick(() => {
+            this.filterMode = 1;
+            this.floorRevision++;
+          })
+        Button(`✨ 清静位 (${this.quietCount})`)
+          .height(28)
+          .fontSize(11)
+          .fontColor(this.getFilterText(2))
+          .backgroundColor(this.getFilterBg(2))
+          .borderRadius(12)
+          .padding({ left: 10, right: 10 })
+          .onClick(() => {
+            this.filterMode = 2;
+            this.floorRevision++;
+          })
       }
       .width('100%')
 
@@ -306,51 +591,18 @@ export struct LibraryBookingPage {
           areaName: this.getCurrentArea()!.name,
           seats: this.getCurrentArea()!.seats,
           selectedSeatId: this.selectedSeatId,
-          onlyShowAvailable: this.onlyShowAvailable,
+          filterMode: this.filterMode,
           dataRevision: this.floorRevision,
           isFullScreen: true,
-          onSeatTap: (seat: ShuYoLibrarySeat, zoneHint: string) => {
-            this.handleSeatSelected(seat, zoneHint);
+          onSeatDetailTap: (pt: ShuYoFloorPlanPoint) => {
+            this.handlePointSelected(pt);
           },
           onRequestFullScreen: () => {}
         })
       }
 
-      if (this.findSelectedSeat() !== undefined) {
-        Row({ space: 10 }) {
-          Column({ space: 2 }) {
-            Text(`座位 ${this.findSelectedSeat()!.seatLabel}${this.selectedSeatZoneHint.length > 0 ? ' · ' + this.selectedSeatZoneHint : ''}`)
-              .fontSize(14)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(this.store.colors.textPrimary)
-            Text(this.getSeatStatusLabel(this.findSelectedSeat()!))
-              .fontSize(12)
-              .fontColor(this.getSeatCardText(this.findSelectedSeat()!))
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          Button(this.isSubmittingBooking ? '提交中...' : '预约此座')
-            .height(36)
-            .fontSize(13)
-            .enabled(this.isSeatBookable(this.findSelectedSeat()!) && !this.isSubmittingBooking)
-            .fontColor(this.store.colors.onAccent)
-            .backgroundColor(
-              this.isSeatBookable(this.findSelectedSeat()!)
-                ? '#16A34A'
-                : this.store.colors.disabledFill
-            )
-            .borderRadius(12)
-            .padding({ left: 14, right: 14 })
-            .onClick(() => {
-              this.confirmBookSelectedSeat();
-            })
-        }
-        .width('100%')
-        .padding(12)
-        .borderRadius(12)
-        .backgroundColor(this.store.colors.surfaceAlt)
-        .border({ width: 1, color: this.store.colors.border })
+      if (this.selectedPoint !== undefined) {
+        this.cinemaTicketSelectionCard(this.selectedPoint, true)
       }
     }
     .width('100%')
@@ -363,7 +615,7 @@ export struct LibraryBookingPage {
       Column({ space: 10 }) {
         ShuYoTopBar({
           headerTitle: '图书馆预约',
-          subtitleText: '先选时段，在平面图查看绿/红空位',
+          subtitleText: '先选时段，在平面图查看绿/红空位与清静邻座',
           showBack: true,
           rightLabel: '',
           rightSymbolName: '',
@@ -412,7 +664,7 @@ export struct LibraryBookingPage {
         if (this.activeTabMode === 0) {
           Scroll() {
             Column({ space: 12 }) {
-              // Venues
+              // Venues (all 7 SHU venues)
               Scroll() {
                 Row({ space: 8 }) {
                   ForEach(LibraryBookingService.venues, (v: ShuYoLibraryVenue, idx: number) => {
@@ -426,9 +678,8 @@ export struct LibraryBookingPage {
                       .onClick(() => {
                         if (this.selectedVenueIdx !== idx) {
                           this.selectedVenueIdx = idx;
-                          this.selectedAreaIdx = 0;
-                          this.selectedSeatId = '';
-                          this.selectedSeatZoneHint = '';
+                          this.selectedAreaIdx = v.id === 'studySpace' ? -1 : 0;
+                          this.clearSelection();
                           this.reloadSeatAvailability();
                         }
                       })
@@ -456,7 +707,7 @@ export struct LibraryBookingPage {
                     .onClick(() => {
                       if (this.selectedDay !== this.todayStr) {
                         this.selectedDay = this.todayStr;
-                        this.selectedSeatId = '';
+                        this.clearSelection();
                         this.reloadSeatAvailability();
                       }
                     })
@@ -470,7 +721,7 @@ export struct LibraryBookingPage {
                     .onClick(() => {
                       if (this.selectedDay !== this.tomorrowStr) {
                         this.selectedDay = this.tomorrowStr;
-                        this.selectedSeatId = '';
+                        this.clearSelection();
                         this.reloadSeatAvailability();
                       }
                     })
@@ -659,9 +910,25 @@ export struct LibraryBookingPage {
               .backgroundColor(this.store.colors.surface)
               .border({ width: 1, color: this.store.colors.border })
 
-              // Areas + View Switcher
+              // Areas (+ Overview toggle for 24H Study Space)
               Scroll() {
                 Row({ space: 8 }) {
+                  if (this.isOverviewAvailable()) {
+                    Button(this.getOverviewSummaryLabel())
+                      .height(30)
+                      .fontSize(12)
+                      .fontColor(this.selectedAreaIdx < 0 ? this.store.colors.onSelectedFill : this.store.colors.textSecondary)
+                      .backgroundColor(this.selectedAreaIdx < 0 ? this.store.colors.selectedFill : this.store.colors.chipFill)
+                      .borderRadius(14)
+                      .padding({ left: 12, right: 12 })
+                      .onClick(() => {
+                        if (this.selectedAreaIdx >= 0) {
+                          this.selectedAreaIdx = -1;
+                          this.clearSelection();
+                          this.reloadSeatAvailability();
+                        }
+                      })
+                  }
                   ForEach(this.areas, (area: ShuYoLibraryArea, aIdx: number) => {
                     Button(`${area.name} (空${area.freeCount}/${area.totalCount})`)
                       .height(30)
@@ -673,8 +940,7 @@ export struct LibraryBookingPage {
                       .onClick(() => {
                         if (this.selectedAreaIdx !== aIdx) {
                           this.selectedAreaIdx = aIdx;
-                          this.selectedSeatId = '';
-                          this.selectedSeatZoneHint = '';
+                          this.clearSelection();
                           this.reloadSeatAvailability();
                         }
                       })
@@ -694,7 +960,7 @@ export struct LibraryBookingPage {
                         .fontSize(15)
                         .fontWeight(FontWeight.Bold)
                         .fontColor(this.store.colors.textPrimary)
-                      Text(`空闲 ${this.getCurrentArea()!.freeCount} 个 · 占用 ${this.getOccupiedCount(this.getCurrentArea()!)} 个`)
+                      Text(`空闲 ${this.getCurrentArea()!.freeCount} · 清静邻空 ${this.quietCount} · 占用 ${this.getOccupiedCount(this.getCurrentArea()!)}`)
                         .fontSize(11)
                         .fontColor(this.store.colors.textTertiary)
                     }
@@ -725,15 +991,39 @@ export struct LibraryBookingPage {
                   }
                   .width('100%')
 
-                  Row({ space: 8 }) {
-                    Text('仅高亮空闲座位')
-                      .fontSize(12)
-                      .fontColor(this.store.colors.textSecondary)
-                    Blank()
-                    Toggle({ type: ToggleType.Switch, isOn: this.onlyShowAvailable })
-                      .selectedColor('#16A34A')
-                      .onChange((val: boolean) => {
-                        this.onlyShowAvailable = val;
+                  // 3-way segmented filter strip: 全部 / 仅空闲 / ✨ 清静位(邻座空)
+                  Row({ space: 6 }) {
+                    Button('全部')
+                      .layoutWeight(1)
+                      .height(28)
+                      .fontSize(11)
+                      .fontColor(this.getFilterText(0))
+                      .backgroundColor(this.getFilterBg(0))
+                      .borderRadius(10)
+                      .onClick(() => {
+                        this.filterMode = 0;
+                        this.floorRevision++;
+                      })
+                    Button(`仅空闲 (${this.getCurrentArea()!.freeCount})`)
+                      .layoutWeight(1)
+                      .height(28)
+                      .fontSize(11)
+                      .fontColor(this.getFilterText(1))
+                      .backgroundColor(this.getFilterBg(1))
+                      .borderRadius(10)
+                      .onClick(() => {
+                        this.filterMode = 1;
+                        this.floorRevision++;
+                      })
+                    Button(`✨ 清静位(邻空 ${this.quietCount})`)
+                      .layoutWeight(1.3)
+                      .height(28)
+                      .fontSize(11)
+                      .fontColor(this.getFilterText(2))
+                      .backgroundColor(this.getFilterBg(2))
+                      .borderRadius(10)
+                      .onClick(() => {
+                        this.filterMode = 2;
                         this.floorRevision++;
                       })
                   }
@@ -745,11 +1035,11 @@ export struct LibraryBookingPage {
                       areaName: this.getCurrentArea()!.name,
                       seats: this.getCurrentArea()!.seats,
                       selectedSeatId: this.selectedSeatId,
-                      onlyShowAvailable: this.onlyShowAvailable,
+                      filterMode: this.filterMode,
                       dataRevision: this.floorRevision,
                       isFullScreen: false,
-                      onSeatTap: (seat: ShuYoLibrarySeat, zoneHint: string) => {
-                        this.handleSeatSelected(seat, zoneHint);
+                      onSeatDetailTap: (pt: ShuYoFloorPlanPoint) => {
+                        this.handlePointSelected(pt);
                       },
                       onRequestFullScreen: () => {
                         this.showFullScreenMapSheet = true;
@@ -757,48 +1047,48 @@ export struct LibraryBookingPage {
                     })
                   } else {
                     Column({ space: 8 }) {
-                      Row({ space: 12 }) {
-                        Text('● 空闲(绿)')
+                      Row({ space: 10 }) {
+                        Text('● 空闲')
                           .fontSize(11)
                           .fontColor('#16A34A')
-                        Text('● 占用(红)')
+                        Text('● 清静(邻空)')
+                          .fontSize(11)
+                          .fontColor('#059669')
+                        Text('● 占用')
                           .fontSize(11)
                           .fontColor('#DC2626')
-                        Text('● 我的预约(蓝)')
+                        Text('● 已约')
                           .fontSize(11)
                           .fontColor('#2563EB')
-                        Text('● 停用(灰)')
-                          .fontSize(11)
-                          .fontColor(this.store.colors.textMuted)
                       }
                       .width('100%')
 
                       Grid() {
-                        ForEach(this.getDisplayedListSeats(this.getCurrentArea()!), (seat: ShuYoLibrarySeat) => {
+                        ForEach(this.getDisplayedListPoints(), (pt: ShuYoFloorPlanPoint) => {
                           GridItem() {
                             Column({ space: 2 }) {
-                              Text(seat.seatLabel)
-                                .fontSize(12)
+                              Text(pt.normalizedCode)
+                                .fontSize(11.5)
                                 .fontWeight(FontWeight.Bold)
-                                .fontColor(this.getSeatCardText(seat))
-                              Text(seat.isDisabled ? '停用' : (seat.isBooked ? '已约' : (seat.isBusy ? '占用' : '空闲')))
-                                .fontSize(10)
-                                .fontColor(this.getSeatCardText(seat))
+                                .fontColor(this.getSeatCardText(pt.seat))
+                              Text(pt.seat.isDisabled ? '停用' : (pt.seat.isBooked ? '已约' : (pt.seat.isBusy ? '占用' : (pt.isQuiet ? '清静' : '空闲'))))
+                                .fontSize(9.5)
+                                .fontColor(this.getSeatCardText(pt.seat))
                             }
                             .width('100%')
                             .height(50)
                             .borderRadius(10)
-                            .backgroundColor(this.getSeatCardBg(seat))
+                            .backgroundColor(this.getSeatCardBg(pt))
                             .border({
-                              width: seat.id === this.selectedSeatId ? 2 : 1,
-                              color: this.getSeatCardBorder(seat)
+                              width: pt.seat.id === this.selectedSeatId ? 2 : 1,
+                              color: this.getSeatCardBorder(pt.seat)
                             })
                             .justifyContent(FlexAlign.Center)
                             .onClick(() => {
-                              this.handleSeatSelected(seat, `${this.getCurrentArea()!.name} ${seat.seatLabel}号`);
+                              this.handleSeatSelectedFromList(pt.seat);
                             })
                           }
-                        }, (seat: ShuYoLibrarySeat): string => `${seat.id}-${seat.isBusy}-${seat.isBooked}-${this.floorRevision}`)
+                        }, (pt: ShuYoFloorPlanPoint): string => `${pt.seat.id}-${pt.seat.isBusy}-${pt.seat.isBooked}-${pt.isQuiet}-${this.filterMode}-${this.floorRevision}`)
                       }
                       .columnsTemplate('1fr 1fr 1fr 1fr 1fr')
                       .columnsGap(8)
@@ -807,7 +1097,7 @@ export struct LibraryBookingPage {
                       .height(
                         Math.min(
                           320,
-                          Math.max(110, Math.ceil(this.getDisplayedListSeats(this.getCurrentArea()!).length / 5) * 58)
+                          Math.max(110, Math.ceil(this.getDisplayedListPoints().length / 5) * 58)
                         )
                       )
                       .nestedScroll({
@@ -825,63 +1115,9 @@ export struct LibraryBookingPage {
                 .border({ width: 1, color: this.store.colors.border })
               }
 
-              // Selected seat confirmation card
-              if (this.findSelectedSeat() !== undefined) {
-                Column({ space: 10 }) {
-                  Row({ space: 10 }) {
-                    Column()
-                      .width(12)
-                      .height(12)
-                      .borderRadius(6)
-                      .backgroundColor(
-                        this.isSeatBookable(this.findSelectedSeat()!)
-                          ? '#16A34A'
-                          : (this.findSelectedSeat()!.isBooked ? '#2563EB' : '#DC2626')
-                      )
-                    Column({ space: 2 }) {
-                      Text(`${this.getCurrentVenue().name} · ${this.findSelectedSeat()!.seatLabel}`)
-                        .fontSize(15)
-                        .fontWeight(FontWeight.Bold)
-                        .fontColor(this.store.colors.textPrimary)
-                      Text(this.selectedSeatZoneHint.length > 0
-                        ? `${this.selectedSeatZoneHint} · ${this.selectedDay} ${this.selectedStartTime}-${this.selectedEndTime}`
-                        : `${this.selectedDay} ${this.selectedStartTime}-${this.selectedEndTime}`)
-                        .fontSize(12)
-                        .fontColor(this.store.colors.textTertiary)
-                    }
-                    .alignItems(HorizontalAlign.Start)
-                    .layoutWeight(1)
-
-                    Text(this.getSeatStatusLabel(this.findSelectedSeat()!))
-                      .fontSize(11)
-                      .fontWeight(FontWeight.Medium)
-                      .fontColor(this.getSeatCardText(this.findSelectedSeat()!))
-                  }
-                  .width('100%')
-
-                  Button(this.isSubmittingBooking
-                    ? '正在提交预约...'
-                    : (this.isSeatBookable(this.findSelectedSeat()!) ? '确认预约该座位' : '该座位当前不可预约'))
-                    .width('100%')
-                    .height(42)
-                    .fontSize(14)
-                    .enabled(this.isSeatBookable(this.findSelectedSeat()!) && !this.isSubmittingBooking)
-                    .fontColor(this.store.colors.onAccent)
-                    .backgroundColor(
-                      this.isSeatBookable(this.findSelectedSeat()!)
-                        ? '#16A34A'
-                        : this.store.colors.disabledFill
-                    )
-                    .borderRadius(12)
-                    .onClick(() => {
-                      this.confirmBookSelectedSeat();
-                    })
-                }
-                .width('100%')
-                .padding(14)
-                .borderRadius(16)
-                .backgroundColor(this.store.colors.surface)
-                .border({ width: 1.5, color: this.getSeatCardBorder(this.findSelectedSeat()!) })
+              // Bottom Cinema-Ticket Selected Seat Bar
+              if (this.selectedPoint !== undefined) {
+                this.cinemaTicketSelectionCard(this.selectedPoint, false)
               }
             }
             .width('100%')
