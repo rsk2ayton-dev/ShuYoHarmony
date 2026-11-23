@@ -3,6 +3,7 @@ import {
   ShuYoLoginPageParam,
   ShuYoTabId
 } from '../models/ShuYoModels';
+import { NativeSystemService } from '../services/NativeSystemService';
 import { ShuYoAppStore } from '../store/ShuYoAppStore';
 import { HomeDashboardView } from './tabs/HomeDashboardView';
 import { RateHomeView } from './tabs/RateHomeView';
@@ -18,6 +19,9 @@ struct Index {
 
   aboutToAppear(): void {
     this.store.initIfNeeded();
+    if (NativeSystemService.consumePendingLaunchTab() === 'schedule') {
+      this.store.switchToScheduleTab();
+    }
   }
 
   private getTabLabel(tabId: ShuYoTabId): string {

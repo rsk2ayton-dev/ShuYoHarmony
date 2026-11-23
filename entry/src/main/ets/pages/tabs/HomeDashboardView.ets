@@ -10,6 +10,7 @@ import {
 } from '../../models/ShuYoModels';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { CampusCardService } from '../../services/CampusCardService';
+import { NativeSystemService } from '../../services/NativeSystemService';
 import { ShuYoSectionHeader } from '../../components/ShuYoCommonViews';
 
 interface ShuYoToolEntry {
@@ -22,6 +23,7 @@ interface ShuYoToolEntry {
 @ComponentV2
 export struct HomeDashboardView {
   @Param navStack: NavPathStack = new NavPathStack();
+  @Local lunarLabel: string = NativeSystemService.getTodayLunarLabel();
   private store: ShuYoAppStore = ShuYoAppStore.instance();
   private readonly toolEntries: ShuYoToolEntry[] = [
     { routeName: 'CourseRecordingsPage', label: '课程录播', subtitle: '课堂回放与直播', symbolKind: 'video' },
@@ -57,7 +59,8 @@ export struct HomeDashboardView {
   private getTodayWeekdayText(): string {
     const d = new Date().getDay();
     const idx = d === 0 ? 6 : d - 1;
-    return ShuYoConstants.weekdayLabels[idx];
+    const lunar = this.lunarLabel.length > 0 ? ` · ${this.lunarLabel}` : '';
+    return `${ShuYoConstants.weekdayLabels[idx]}${lunar}`;
   }
 
   private getMonthSpendText(): string {

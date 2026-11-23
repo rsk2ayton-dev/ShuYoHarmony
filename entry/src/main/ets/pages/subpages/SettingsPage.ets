@@ -1,7 +1,14 @@
-import { ShuYoConstants } from '../../core/ShuYoConstants';
+import { common } from '@kit.AbilityKit';
 import { ShuYoThemeSpec, ShuYoThemes } from '../../core/ShuYoTheme';
 import { ShuYoCampusSystem } from '../../models/ShuYoModels';
+import { CampusCardService } from '../../services/CampusCardService';
+import { CourseRecordingService } from '../../services/CourseRecordingService';
+import { CourseReviewService } from '../../services/CourseReviewService';
+import { ShuYoCookieJar } from '../../services/HttpClientService';
+import { NativeSystemService, ShuYoBundleMeta } from '../../services/NativeSystemService';
 import { PreferencesService } from '../../services/PreferencesService';
+import { ScheduleWidgetService } from '../../services/ScheduleWidgetService';
+import { SecureStorageService } from '../../services/SecureStorageService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoTopBar } from '../../components/ShuYoCommonViews';
 
@@ -15,7 +22,9 @@ export struct SettingsPage {
   @Local navStack: NavPathStack = new NavPathStack();
   @Local showNicknameSheet: boolean = false;
   @Local draftNickname: string = '';
+  @Local bundleMeta: ShuYoBundleMeta = NativeSystemService.getBundleMeta();
   private store: ShuYoAppStore = ShuYoAppStore.instance();
+  private readonly leadMinuteOptions: number[] = [10, 15, 20, 30];
 
   private openNicknameEditor(): void {
     this.draftNickname = this.store.customNickname.length > 0
@@ -131,8 +140,40 @@ export struct SettingsPage {
   }
 
   private clearCache(): void {
+    ShuYoCookieJar.clearAll();
+    CampusCardService.clearSession();
+    CourseRecordingService.clearSession();
+    CourseReviewService.clearStudentToken();
     PreferencesService.clearAll();
-    this.getUIContext().getPromptAction().showToast({ message: '本地偏好与缓存已清理' });
+    this.store.refreshNativeIntegrations();
+    this.getUIContext().getPromptAction().showToast({ message: '本地偏好、会话与缓存已清理' });
+  }
+
+  private async handleReminderToggle(val: boolean): Promise<void> {
+    if (val === this.store.reminderEnabled) {
+      return;
+    }
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const msg = await this.store.setReminderEnabled(val, ctx);
+    this.getUIContext().getPromptAction().showToast({ message: msg });
+  }
+
+  private async handleLeadSelect(mins: number): Promise<void> {
+    if (mins === this.store.reminderLeadMinutes) {
+      return;
+    }
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const msg = await this.store.setReminderLeadMinutes(mins, ctx);
+    this.getUIContext().getPromptAction().showToast({ message: msg });
+  }
+
+  private async handleReloadWidgets(): Promise<void> {
+    this.store.refreshNativeIntegrations();
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const count = await ScheduleWidgetService.reloadWidgets(ctx);
+    this.getUIContext().getPromptAction().showToast({
+      message: count > 0 ? `已刷新 ${count} 张桌面课表卡片` : '桌面卡片快照已更新，可从桌面添加“今日课表”'
+    });
   }
 
   build() {
@@ -328,6 +369,115 @@ export struct SettingsPage {
             .border({ width: 1, color: this.store.colors.border })
             .alignItems(HorizontalAlign.Start)
 
+            // Native HarmonyOS Kits Card
+            Column({ space: 12 }) {
+              Text('鸿蒙原生系统能力 (Beta)')
+                .fontSize(15)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(this.store.colors.textPrimary)
+
+              Row() {
+                Column({ space: 2 }) {
+                  Text('课前系统代理提醒')
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.store.colors.textPrimary)
+                  Text(this.store.reminderStatusText.length > 0
+                    ? this.store.reminderStatusText
+                    : '基于 BackgroundTasksKit 自动调度未来 7 天上课提醒')
+                    .fontSize(12)
+                    .fontColor(this.store.colors.textTertiary)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.store.reminderEnabled })
+                  .selectedColor(this.store.colors.accent)
+                  .onChange((val: boolean) => {
+                    this.handleReminderToggle(val);
+                  })
+              }
+              .width('100%')
+
+              Row({ space: 6 }) {
+                Text('提前时间')
+                  .fontSize(12)
+                  .fontColor(this.store.colors.textSecondary)
+                Blank()
+                ForEach(this.leadMinuteOptions, (mins: number) => {
+                  Button(`${mins}分`)
+                    .height(26)
+                    .fontSize(11)
+                    .fontColor(
+                      this.store.reminderLeadMinutes === mins
+                        ? this.store.colors.onSelectedFill
+                        : this.store.colors.textSecondary
+                    )
+                    .backgroundColor(
+                      this.store.reminderLeadMinutes === mins
+                        ? this.store.colors.selectedFill
+                        : this.store.colors.chipFill
+                    )
+                    .borderRadius(13)
+                    .padding({ left: 10, right: 10 })
+                    .onClick(() => {
+                      this.handleLeadSelect(mins);
+                    })
+                }, (mins: number): string => `lead-${mins}`)
+              }
+              .width('100%')
+
+              Divider().color(this.store.colors.border)
+
+              Row() {
+                Column({ space: 2 }) {
+                  Text('桌面万能卡片 (Form Kit)')
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.store.colors.textPrimary)
+                  Text('支持桌面 2×2 / 2×4 今日课表卡片及定时更新')
+                    .fontSize(12)
+                    .fontColor(this.store.colors.textTertiary)
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                Button('刷新卡片')
+                  .height(30)
+                  .fontSize(12)
+                  .fontColor(this.store.colors.accent)
+                  .backgroundColor(this.store.colors.accentSoft)
+                  .borderRadius(15)
+                  .padding({ left: 12, right: 12 })
+                  .onClick(() => {
+                    this.handleReloadWidgets();
+                  })
+              }
+              .width('100%')
+
+              Divider().color(this.store.colors.border)
+
+              Row() {
+                Text('敏感会话加密存储')
+                  .fontSize(13)
+                  .fontColor(this.store.colors.textSecondary)
+                Blank()
+                Text(SecureStorageService.isHardwareBacked() ? 'Asset Store Kit 保护中' : '兼容存储模式')
+                  .fontSize(12)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(
+                    SecureStorageService.isHardwareBacked()
+                      ? this.store.colors.success
+                      : this.store.colors.textTertiary
+                  )
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .padding(16)
+            .borderRadius(16)
+            .backgroundColor(this.store.colors.surface)
+            .border({ width: 1, color: this.store.colors.border })
+            .alignItems(HorizontalAlign.Start)
+
             // Network & Layout Card
             Column({ space: 12 }) {
               Row() {
@@ -409,13 +559,19 @@ export struct SettingsPage {
 
             // About & Logout
             Column({ space: 6 }) {
-              Text(`SHU友 HarmonyOS 原生版 v${ShuYoConstants.appVersion} (ArkUI V2)`)
+              Text(`SHU友 HarmonyOS 原生版 v${this.bundleMeta.versionName} · Build ${this.bundleMeta.versionCode}`)
                 .fontSize(13)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(this.store.colors.textSecondary)
-              Text(`改编自开源项目 shuosc/ShuYo · Bundle: ${ShuYoConstants.bundleName}`)
+              Text(`改编自开源项目 shuosc/ShuYo · Bundle: ${this.bundleMeta.bundleName}`)
                 .fontSize(11)
                 .fontColor(this.store.colors.textMuted)
+              Text('查看 ShuYoHarmony 开源仓库')
+                .fontSize(12)
+                .fontColor(this.store.colors.accent)
+                .onClick(() => {
+                  NativeSystemService.openExternalUrl('https://github.com/rsk2ayton-dev/ShuYoHarmony', this.getUIContext());
+                })
             }
             .width('100%')
             .padding(12)

@@ -10,7 +10,7 @@ import {
 } from '../models/ShuYoModels';
 import { HttpClientService, ShuYoCookieJar } from './HttpClientService';
 import { JsonHelpers } from './JsonHelpers';
-import { PreferencesService } from './PreferencesService';
+import { SecureStorageService } from './SecureStorageService';
 
 interface ShuYoVodSavedSession {
   studentId: string;
@@ -47,7 +47,7 @@ export class CourseRecordingService {
   }
 
   static clearSession(): void {
-    PreferencesService.remove(CourseRecordingService.sessionStorageKey);
+    SecureStorageService.remove(CourseRecordingService.sessionStorageKey);
   }
 
   private static saveSession(studentId: string, jwtToken: string, useWebVpn: boolean): void {
@@ -56,11 +56,11 @@ export class CourseRecordingService {
       jwtToken: jwtToken,
       useWebVpn: useWebVpn
     };
-    PreferencesService.setString(CourseRecordingService.sessionStorageKey, JSON.stringify(obj));
+    SecureStorageService.setString(CourseRecordingService.sessionStorageKey, JSON.stringify(obj));
   }
 
   private static loadSavedSession(expectedStudentId: string, useWebVpn: boolean): string {
-    const raw = PreferencesService.getString(CourseRecordingService.sessionStorageKey, '');
+    const raw = SecureStorageService.getString(CourseRecordingService.sessionStorageKey, '');
     if (raw.length === 0) {
       return '';
     }

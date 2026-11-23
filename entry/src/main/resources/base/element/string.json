@@ -11,6 +11,30 @@
     {
       "name": "EntryAbility_label",
       "value": "SHU友"
+    },
+    {
+      "name": "location_permission_reason",
+      "value": "用于在校园矢量地图中显示您的当前位置并自动切换所在校区"
+    },
+    {
+      "name": "precise_location_permission_reason",
+      "value": "用于在校园矢量地图中提供精准蓝点定位"
+    },
+    {
+      "name": "EntryFormAbility_label",
+      "value": "SHU友今日课表"
+    },
+    {
+      "name": "EntryFormAbility_desc",
+      "value": "SHU友桌面课表卡片扩展能力"
+    },
+    {
+      "name": "schedule_widget_display_name",
+      "value": "今日课表"
+    },
+    {
+      "name": "schedule_widget_desc",
+      "value": "在桌面快速查看上海大学今日课程安排与当前教学周"
     }
   ]
 }

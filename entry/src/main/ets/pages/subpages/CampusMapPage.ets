@@ -1,12 +1,16 @@
 import { webview } from '@kit.ArkWeb';
+import { common } from '@kit.AbilityKit';
+import { geoLocationManager } from '@kit.LocationKit';
 import {
   ShuYoCampusInfo,
   ShuYoCampusMapData,
   ShuYoCampusMapPlace,
   ShuYoMapFact,
+  ShuYoMapLocationPoint,
   ShuYoMapPoint,
   ShuYoMapView
 } from '../../models/ShuYoModels';
+import { CampusLocationService } from '../../services/CampusLocationService';
 import { CampusMapService } from '../../services/CampusMapService';
 import { JsonHelpers } from '../../services/JsonHelpers';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
@@ -36,6 +40,8 @@ interface ShuYoMapCanvasUpdatePayload {
   accent: string;
   bottomInset: number;
   focus: boolean;
+  focusPoint?: ShuYoMapPoint;
+  location?: ShuYoMapLocationPoint;
   active: boolean;
 }
 
@@ -66,9 +72,15 @@ export struct CampusMapPage {
   @Local showPlaceList: boolean = false;
   @Local searchQuery: string = '';
   @Local webReady: boolean = false;
+  @Local isLocating: boolean = false;
+  @Local hasDeviceLocation: boolean = false;
   private store: ShuYoAppStore = ShuYoAppStore.instance();
   private webController: webview.WebviewController = new webview.WebviewController();
   private loadedCampusInWeb: string = '';
+  private lastWgsLng: number = 0;
+  private lastWgsLat: number = 0;
+  private lastAccuracyMeters: number = 0;
+  private watchCallback: ((loc: geoLocationManager.Location) => void) | undefined = undefined;
   private mapBridge: ShuYoMapJsBridge = new ShuYoMapJsBridge((msg: string) => {
     this.handleBridgeMessage(msg);
   });
@@ -77,6 +89,13 @@ export struct CampusMapPage {
     this.mapData = CampusMapService.loadMapData();
     if (this.mapData.campuses.length > 0) {
       this.selectedCampusId = this.mapData.campuses[0].id;
+    }
+  }
+
+  aboutToDisappear(): void {
+    if (this.watchCallback !== undefined) {
+      CampusLocationService.stopWatching(this.watchCallback);
+      this.watchCallback = undefined;
     }
   }
 
@@ -174,15 +193,103 @@ export struct CampusMapPage {
     this.syncUpdateToWeb(focusPlace);
   }
 
-  private syncUpdateToWeb(focusPlace: boolean): void {
+  private computeLocationOverlayForCurrentCampus(): ShuYoMapLocationPoint | undefined {
+    if (!this.hasDeviceLocation) {
+      return undefined;
+    }
+    const campus = this.getCurrentCampus();
+    if (campus === undefined) {
+      return undefined;
+    }
+    return CampusMapService.projectWgs84ToCampus(
+      campus,
+      this.lastWgsLng,
+      this.lastWgsLat,
+      this.lastAccuracyMeters
+    );
+  }
+
+  private ensureWatchingLocation(): void {
+    if (this.watchCallback !== undefined) {
+      return;
+    }
+    const cb = (loc: geoLocationManager.Location): void => {
+      this.hasDeviceLocation = true;
+      this.lastWgsLng = loc.longitude;
+      this.lastWgsLat = loc.latitude;
+      this.lastAccuracyMeters = loc.accuracy;
+      this.syncUpdateToWeb(false);
+    };
+    if (CampusLocationService.startWatching(cb)) {
+      this.watchCallback = cb;
+    }
+  }
+
+  private async locateUserOnCampus(): Promise<void> {
+    if (this.isLocating) {
+      return;
+    }
+    this.isLocating = true;
+    try {
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const res = await CampusLocationService.locateOnce(ctx);
+      if (!res.ok) {
+        this.getUIContext().getPromptAction().showToast({ message: res.message });
+        return;
+      }
+      this.hasDeviceLocation = true;
+      this.lastWgsLng = res.longitude;
+      this.lastWgsLat = res.latitude;
+      this.lastAccuracyMeters = res.accuracy;
+      this.ensureWatchingLocation();
+
+      const matchedCampus = CampusMapService.findCampusAtWgs84(
+        this.mapData.campuses,
+        res.longitude,
+        res.latitude
+      );
+      if (matchedCampus === undefined) {
+        this.syncUpdateToWeb(false);
+        this.getUIContext().getPromptAction().showToast({
+          message: '当前位置不在宝山/延长/嘉定校区范围内'
+        });
+        return;
+      }
+
+      if (matchedCampus.id !== this.selectedCampusId) {
+        this.selectedCampusId = matchedCampus.id;
+        this.selectedPlace = undefined;
+        this.showPlaceSheet = false;
+        this.syncCampusToWeb(false);
+      }
+      const projected = CampusMapService.projectWgs84ToCampus(
+        matchedCampus,
+        res.longitude,
+        res.latitude,
+        res.accuracy
+      );
+      if (projected !== undefined) {
+        this.syncUpdateToWeb(true, { x: projected.x, y: projected.y });
+      }
+      const toastMsg = res.message.length > 0 ? res.message : `已定位到${matchedCampus.name}`;
+      this.getUIContext().getPromptAction().showToast({ message: toastMsg });
+    } finally {
+      this.isLocating = false;
+    }
+  }
+
+  private syncUpdateToWeb(focusPlace: boolean, focusPoint?: ShuYoMapPoint): void {
     if (!this.webReady) {
       return;
     }
+    const locOverlay = this.computeLocationOverlayForCurrentCampus();
     const updatePayload: ShuYoMapCanvasUpdatePayload = {
       selectedId: this.selectedPlace !== undefined ? this.selectedPlace.id : '',
       accent: this.store.colors.accent,
       bottomInset: 0,
       focus: focusPlace,
+      focusPoint: focusPoint,
+      location: locOverlay,
       active: true
     };
     try {
@@ -324,7 +431,7 @@ export struct CampusMapPage {
         .backgroundColor(this.store.colors.surface)
         .border({ width: 1, color: this.store.colors.border })
 
-        Stack({ alignContent: Alignment.TopStart }) {
+        Stack({ alignContent: Alignment.BottomEnd }) {
           Web({ src: $rawfile('campus_map/canvas.html'), controller: this.webController })
             .javaScriptAccess(true)
             .domStorageAccess(true)
@@ -335,11 +442,60 @@ export struct CampusMapPage {
               methodList: ['postMessage'],
               controller: this.webController
             })
+            .onLoadIntercept((event: OnLoadInterceptEvent): boolean => {
+              const reqUrl = event.data.getRequestUrl();
+              if (reqUrl === 'about:blank' || reqUrl.includes('campus_map/canvas.html')) {
+                return false;
+              }
+              return true;
+            })
             .onPageEnd(() => {
               this.syncCampusToWeb(false);
             })
             .width('100%')
             .height('100%')
+
+          if (!this.showPlaceList) {
+            Button() {
+              Row({ space: 6 }) {
+                if (this.isLocating) {
+                  LoadingProgress()
+                    .width(16)
+                    .height(16)
+                    .color(this.store.colors.onAccent)
+                } else {
+                  SymbolGlyph($r('sys.symbol.map'))
+                    .fontSize(16)
+                    .fontColor([this.hasDeviceLocation ? this.store.colors.onAccent : this.store.colors.accent])
+                }
+                Text(this.isLocating ? '定位中' : '定位')
+                  .fontSize(13)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(
+                    this.isLocating || this.hasDeviceLocation
+                      ? this.store.colors.onAccent
+                      : this.store.colors.textPrimary
+                  )
+              }
+              .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+            }
+            .height(38)
+            .borderRadius(19)
+            .backgroundColor(
+              this.isLocating || this.hasDeviceLocation
+                ? this.store.colors.accent
+                : this.store.colors.surface
+            )
+            .border({
+              width: 1,
+              color: this.hasDeviceLocation ? this.store.colors.accent : this.store.colors.borderStrong
+            })
+            .shadow({ radius: 10, color: '#26000000', offsetX: 0, offsetY: 3 })
+            .margin({ right: 16, bottom: 22 })
+            .onClick(() => {
+              this.locateUserOnCampus();
+            })
+          }
 
           if (this.showPlaceList) {
             List({ space: 8 }) {

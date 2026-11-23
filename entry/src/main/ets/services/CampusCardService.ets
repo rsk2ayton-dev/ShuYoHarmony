@@ -8,7 +8,7 @@ import {
 import { AuthService } from './AuthService';
 import { HttpClientService, ShuYoCookieJar } from './HttpClientService';
 import { JsonHelpers } from './JsonHelpers';
-import { PreferencesService } from './PreferencesService';
+import { SecureStorageService } from './SecureStorageService';
 
 interface ShuYoDemoTxItem {
   daysAgo: number;
@@ -163,7 +163,7 @@ export class CampusCardService {
   }
 
   static clearSession(): void {
-    PreferencesService.remove(CampusCardService.sessionStorageKey);
+    SecureStorageService.remove(CampusCardService.sessionStorageKey);
   }
 
   private static saveSession(studentId: string, accessToken: string): void {
@@ -171,11 +171,11 @@ export class CampusCardService {
       'studentId': studentId,
       'access_token': accessToken
     };
-    PreferencesService.setString(CampusCardService.sessionStorageKey, JSON.stringify(obj));
+    SecureStorageService.setString(CampusCardService.sessionStorageKey, JSON.stringify(obj));
   }
 
   private static loadSavedSession(): ShuYoCardSession | undefined {
-    const raw = PreferencesService.getString(CampusCardService.sessionStorageKey, '');
+    const raw = SecureStorageService.getString(CampusCardService.sessionStorageKey, '');
     if (raw.length === 0) {
       return undefined;
     }

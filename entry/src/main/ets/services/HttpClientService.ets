@@ -2,7 +2,7 @@ import { rcp } from '@kit.RemoteCommunicationKit';
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 import { ShuYoConstants } from '../core/ShuYoConstants';
-import { PreferencesService } from './PreferencesService';
+import { SecureStorageService } from './SecureStorageService';
 import { JsonHelpers } from './JsonHelpers';
 
 export interface ShuYoHttpResult {
@@ -29,7 +29,7 @@ export class ShuYoCookieJar {
       return;
     }
     ShuYoCookieJar.loaded = true;
-    const raw = PreferencesService.getString(ShuYoCookieJar.storageKey, '');
+    const raw = SecureStorageService.getString(ShuYoCookieJar.storageKey, '');
     if (raw.length === 0) {
       return;
     }
@@ -52,13 +52,13 @@ export class ShuYoCookieJar {
   }
 
   static persist(): void {
-    PreferencesService.setString(ShuYoCookieJar.storageKey, JSON.stringify(ShuYoCookieJar.entries));
+    SecureStorageService.setString(ShuYoCookieJar.storageKey, JSON.stringify(ShuYoCookieJar.entries));
   }
 
   static clearAll(): void {
     ShuYoCookieJar.entries = [];
     ShuYoCookieJar.loaded = true;
-    PreferencesService.remove(ShuYoCookieJar.storageKey);
+    SecureStorageService.remove(ShuYoCookieJar.storageKey);
   }
 
   static clearDomain(domain: string): void {

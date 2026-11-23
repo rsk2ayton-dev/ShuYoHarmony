@@ -229,6 +229,26 @@ export interface ShuYoMapView {
   center: ShuYoMapPoint;
 }
 
+export interface ShuYoMapGeoTransform {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}
+
+export interface ShuYoMapCoordinate {
+  longitude: number;
+  latitude: number;
+}
+
+export interface ShuYoMapLocationPoint {
+  x: number;
+  y: number;
+  accuracy: number;
+}
+
 export interface ShuYoCampusInfo {
   id: string;
   name: string;
@@ -236,6 +256,9 @@ export interface ShuYoCampusInfo {
   viewBox: number[];
   initialView: ShuYoMapView;
   backgroundColor: string;
+  hasGeoTransform: boolean;
+  geoTransform: ShuYoMapGeoTransform;
+  metersPerMapUnit: number;
 }
 
 export interface ShuYoMapFact {

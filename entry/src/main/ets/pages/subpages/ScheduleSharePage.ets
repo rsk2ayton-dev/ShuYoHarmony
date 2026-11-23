@@ -1,4 +1,4 @@
-import { pasteboard } from '@kit.BasicServicesKit';
+import { NativeSystemService } from '../../services/NativeSystemService';
 import { ScheduleService } from '../../services/ScheduleService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoTopBar } from '../../components/ShuYoCommonViews';
@@ -20,13 +20,22 @@ export struct ScheduleSharePage {
   }
 
   private copyShareCode(): void {
-    try {
-      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.getExportedJson());
-      pasteboard.getSystemPasteboard().setDataSync(data);
+    if (NativeSystemService.copyToClipboard(this.getExportedJson())) {
       this.getUIContext().getPromptAction().showToast({ message: '已复制课表分享口令到剪贴板' });
-    } catch (_err) {
+    } else {
       this.getUIContext().getPromptAction().showToast({ message: '复制失败' });
     }
+  }
+
+  private shareViaSystemPanel(): void {
+    const termTitle = `${this.store.scheduleData.term.academicYearName} ${this.store.scheduleData.term.termName}`.trim();
+    const title = termTitle.length > 0 ? `SHU友课表 · ${termTitle}` : 'SHU友课表分享';
+    NativeSystemService.shareText(
+      title,
+      this.getExportedJson(),
+      `共 ${this.store.scheduleData.sessions.length} 节课程 (JSON 口令)`,
+      this.getUIContext()
+    );
   }
 
   private handleImport(): void {
@@ -68,12 +77,23 @@ export struct ScheduleSharePage {
                 .fontSize(13)
                 .fontColor(this.store.colors.textTertiary)
 
-              Button('复制课表分享口令 (JSON)')
+              Button('系统分享课表 (Share Kit)')
                 .width('100%')
                 .height(44)
                 .fontSize(14)
                 .fontColor(this.store.colors.onAccent)
                 .backgroundColor(this.store.colors.accent)
+                .borderRadius(12)
+                .onClick(() => {
+                  this.shareViaSystemPanel();
+                })
+
+              Button('复制课表分享口令 (JSON)')
+                .width('100%')
+                .height(42)
+                .fontSize(14)
+                .fontColor(this.store.colors.accent)
+                .backgroundColor(this.store.colors.accentSoft)
                 .borderRadius(12)
                 .onClick(() => {
                   this.copyShareCode();

@@ -1,7 +1,9 @@
 import { util } from '@kit.ArkTS';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 
 /**
- * Ports AcademicPasswordEncryptor from ShuYo (1024-bit RSA PKCS#1 v1.5).
+ * Uses @kit.CryptoArchitectureKit for 1024-bit RSA PKCS#1 v1.5 encryption
+ * (with pure ArkTS BigInt fallback for unsupported runtimes).
  */
 export class RsaEncryptor {
   private static readonly rsaModulusHex: string =
@@ -19,6 +21,31 @@ export class RsaEncryptor {
     if (messageBytes.length > keyLen - 11) {
       throw new Error('密码过长，无法加密');
     }
+
+    try {
+      const rsaCommon: cryptoFramework.RSACommonParamsSpec = {
+        algName: 'RSA',
+        specType: cryptoFramework.AsyKeySpecType.COMMON_PARAMS_SPEC,
+        n: BigInt('0x' + RsaEncryptor.rsaModulusHex)
+      };
+      const rsaPubSpec: cryptoFramework.RSAPubKeySpec = {
+        algName: 'RSA',
+        specType: cryptoFramework.AsyKeySpecType.PUBLIC_KEY_SPEC,
+        params: rsaCommon,
+        pk: RsaEncryptor.rsaExponent
+      };
+      const keyGen = cryptoFramework.createAsyKeyGeneratorBySpec(rsaPubSpec);
+      const pubKey = keyGen.generatePubKeySync();
+      const cipher = cryptoFramework.createCipher('RSA1024|PKCS1');
+      cipher.initSync(cryptoFramework.CryptoMode.ENCRYPT_MODE, pubKey, null);
+      const encrypted = cipher.doFinalSync({ data: messageBytes });
+      return new util.Base64Helper().encodeToStringSync(encrypted.data);
+    } catch (_err) {
+      return RsaEncryptor.encryptPasswordFallback(messageBytes, keyLen);
+    }
+  }
+
+  private static encryptPasswordFallback(messageBytes: Uint8Array, keyLen: number): string {
 
     // PKCS#1 v1.5 block: 0x00 || 0x02 || PS (>=8 non-zero bytes) || 0x00 || M
     const padded = new Uint8Array(keyLen);

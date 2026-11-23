@@ -1,4 +1,5 @@
 import { AuthService, ShuYoWeComQrSession } from '../../services/AuthService';
+import { NativeSystemService } from '../../services/NativeSystemService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoTopBar } from '../../components/ShuYoCommonViews';
 
@@ -169,6 +170,19 @@ export struct WeComScanPage {
                 .padding({ left: 18, right: 18 })
                 .onClick(() => {
                   this.loadQrSession();
+                })
+            } else if (this.qrSession !== undefined) {
+              Button('在浏览器 / 企业微信中打开')
+                .height(36)
+                .fontSize(13)
+                .fontColor(this.store.colors.accent)
+                .backgroundColor(this.store.colors.accentSoft)
+                .borderRadius(18)
+                .padding({ left: 16, right: 16 })
+                .onClick(() => {
+                  if (this.qrSession !== undefined) {
+                    NativeSystemService.openExternalUrl(this.qrSession.confirmUrl, this.getUIContext());
+                  }
                 })
             }
           }

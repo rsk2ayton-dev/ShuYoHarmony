@@ -2,7 +2,10 @@ import {
   ShuYoCampusInfo,
   ShuYoCampusMapData,
   ShuYoCampusMapPlace,
-  ShuYoMapFact
+  ShuYoMapCoordinate,
+  ShuYoMapFact,
+  ShuYoMapGeoTransform,
+  ShuYoMapLocationPoint
 } from '../models/ShuYoModels';
 import { JsonHelpers } from './JsonHelpers';
 import { RawFileService } from './RawFileService';
@@ -36,6 +39,19 @@ export class CampusMapService {
       }
       const ivObj = JsonHelpers.asObject(cObj['initialView']);
       const centerObj = JsonHelpers.asObject(ivObj !== undefined ? ivObj['center'] : undefined);
+      const gtObj = JsonHelpers.asObject(cObj['geoTransform']);
+      const mpuObj = JsonHelpers.asObject(cObj['metersPerMapUnit']);
+      const hasGeoTransform = gtObj !== undefined && mpuObj !== undefined;
+      const geoTransform: ShuYoMapGeoTransform = {
+        a: JsonHelpers.num(gtObj, 'a', 0),
+        b: JsonHelpers.num(gtObj, 'b', 0),
+        c: JsonHelpers.num(gtObj, 'c', 0),
+        d: JsonHelpers.num(gtObj, 'd', 0),
+        e: JsonHelpers.num(gtObj, 'e', 0),
+        f: JsonHelpers.num(gtObj, 'f', 0)
+      };
+      const metersPerMapUnit = JsonHelpers.num(mpuObj, 'x', 1);
+
       campuses.push({
         id: JsonHelpers.str(cObj, 'id'),
         name: JsonHelpers.str(cObj, 'name'),
@@ -48,7 +64,10 @@ export class CampusMapService {
             y: JsonHelpers.num(centerObj, 'y', 450)
           }
         },
-        backgroundColor: JsonHelpers.str(cObj, 'backgroundColor', '#EAEADF')
+        backgroundColor: JsonHelpers.str(cObj, 'backgroundColor', '#EAEADF'),
+        hasGeoTransform: hasGeoTransform && metersPerMapUnit > 0,
+        geoTransform: geoTransform,
+        metersPerMapUnit: metersPerMapUnit > 0 ? metersPerMapUnit : 1
       });
     }
 
@@ -98,6 +117,85 @@ export class CampusMapService {
 
   static readCampusSvg(assetPath: string): string {
     return RawFileService.readText(assetPath);
+  }
+
+  /**
+   * Matches upstream SHUMap / ShuYo WGS-84 -> GCJ-02 conversion before applying SVG affine matrix.
+   */
+  static wgs84ToGcj02(longitude: number, latitude: number): ShuYoMapCoordinate {
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude) ||
+      Math.abs(longitude) > 180 || Math.abs(latitude) > 90) {
+      return { longitude: longitude, latitude: latitude };
+    }
+    if (longitude < 72.004 || longitude > 137.8347 || latitude < 0.8293 || latitude > 55.8271) {
+      return { longitude: longitude, latitude: latitude };
+    }
+    const a = 6378245.0;
+    const ee = 0.006693421622965943;
+    const x = longitude - 105.0;
+    const y = latitude - 35.0;
+    const common = (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+    let dLat = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+    let dLng = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+    dLat += common +
+      (20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin(y / 3.0 * Math.PI)) * 2.0 / 3.0 +
+      (160.0 * Math.sin(y / 12.0 * Math.PI) + 320.0 * Math.sin(y * Math.PI / 30.0)) * 2.0 / 3.0;
+    dLng += common +
+      (20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin(x / 3.0 * Math.PI)) * 2.0 / 3.0 +
+      (150.0 * Math.sin(x / 12.0 * Math.PI) + 300.0 * Math.sin(x / 30.0 * Math.PI)) * 2.0 / 3.0;
+    const radLat = latitude / 180.0 * Math.PI;
+    const magic = 1.0 - ee * Math.pow(Math.sin(radLat), 2);
+    const sqrtMagic = Math.sqrt(magic);
+    dLat = dLat * 180.0 / ((a * (1.0 - ee)) / (magic * sqrtMagic) * Math.PI);
+    dLng = dLng * 180.0 / (a / sqrtMagic * Math.cos(radLat) * Math.PI);
+    return {
+      longitude: longitude + dLng,
+      latitude: latitude + dLat
+    };
+  }
+
+  static projectWgs84ToCampus(
+    campus: ShuYoCampusInfo,
+    longitude: number,
+    latitude: number,
+    accuracyMeters: number
+  ): ShuYoMapLocationPoint | undefined {
+    if (!campus.hasGeoTransform || campus.viewBox.length < 4) {
+      return undefined;
+    }
+    const gcj = CampusMapService.wgs84ToGcj02(longitude, latitude);
+    const t = campus.geoTransform;
+    const px = t.a * gcj.longitude + t.b * gcj.latitude + t.c;
+    const py = t.d * gcj.longitude + t.e * gcj.latitude + t.f;
+    const minX = campus.viewBox[0];
+    const minY = campus.viewBox[1];
+    const maxX = minX + campus.viewBox[2];
+    const maxY = minY + campus.viewBox[3];
+    if (px < minX || px > maxX || py < minY || py > maxY) {
+      return undefined;
+    }
+    const acc = Number.isFinite(accuracyMeters) && accuracyMeters > 0 && campus.metersPerMapUnit > 0
+      ? accuracyMeters / campus.metersPerMapUnit
+      : 0;
+    return {
+      x: px,
+      y: py,
+      accuracy: acc
+    };
+  }
+
+  static findCampusAtWgs84(
+    campuses: ShuYoCampusInfo[],
+    longitude: number,
+    latitude: number
+  ): ShuYoCampusInfo | undefined {
+    for (let i = 0; i < campuses.length; i++) {
+      const pt = CampusMapService.projectWgs84ToCampus(campuses[i], longitude, latitude, 0);
+      if (pt !== undefined) {
+        return campuses[i];
+      }
+    }
+    return undefined;
   }
 
   static searchPlaces(

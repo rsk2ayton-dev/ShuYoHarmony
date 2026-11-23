@@ -16,7 +16,7 @@ import {
 import { AuthService } from './AuthService';
 import { HttpClientService, ShuYoCookieJar, ShuYoHttpResult } from './HttpClientService';
 import { JsonHelpers } from './JsonHelpers';
-import { PreferencesService } from './PreferencesService';
+import { SecureStorageService } from './SecureStorageService';
 
 interface StoredRateStudentSession {
   studentId: string;
@@ -330,7 +330,7 @@ export class CourseReviewService {
   }
 
   static clearStudentToken(): void {
-    PreferencesService.remove(CourseReviewService.studentTokenKey);
+    SecureStorageService.remove(CourseReviewService.studentTokenKey);
   }
 
   static async fetchLiveHome(): Promise<ShuYoRateHomeData> {
@@ -732,7 +732,7 @@ export class CourseReviewService {
   }
 
   private static loadStoredStudentSession(studentId: string): StoredRateStudentSession | undefined {
-    const raw = PreferencesService.getString(CourseReviewService.studentTokenKey, '');
+    const raw = SecureStorageService.getString(CourseReviewService.studentTokenKey, '');
     if (raw.length === 0) {
       return undefined;
     }
@@ -754,7 +754,7 @@ export class CourseReviewService {
   }
 
   private static saveStudentSession(session: StoredRateStudentSession): void {
-    PreferencesService.setString(CourseReviewService.studentTokenKey, JSON.stringify(session));
+    SecureStorageService.setString(CourseReviewService.studentTokenKey, JSON.stringify(session));
   }
 
   private static async getApiData(path: string, fallbackErr: string): Promise<Record<string, Object>> {

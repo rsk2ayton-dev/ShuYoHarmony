@@ -1,6 +1,6 @@
-import { pasteboard } from '@kit.BasicServicesKit';
 import { ShuYoAnnouncementBlock, ShuYoAnnouncementItem } from '../../models/ShuYoModels';
 import { AnnouncementService } from '../../services/AnnouncementService';
+import { NativeSystemService } from '../../services/NativeSystemService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoEmptyState, ShuYoTopBar } from '../../components/ShuYoCommonViews';
 
@@ -127,12 +127,9 @@ export struct AnnouncementsPage {
     if (urlText.length === 0) {
       return;
     }
-    try {
-      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, urlText);
-      const sysPb = pasteboard.getSystemPasteboard();
-      sysPb.setDataSync(data);
+    if (NativeSystemService.copyToClipboard(urlText)) {
       this.getUIContext().getPromptAction().showToast({ message: '已复制链接到剪贴板' });
-    } catch (_err) {
+    } else {
       this.getUIContext().getPromptAction().showToast({ message: '复制链接失败' });
     }
   }
@@ -188,19 +185,49 @@ export struct AnnouncementsPage {
             .fontWeight(FontWeight.Bold)
             .fontColor(this.store.colors.textPrimary)
 
-          Row({ space: 8 }) {
+          Row({ space: 6 }) {
             Text(`${this.selectedDetail.sourceName} · ${this.selectedDetail.dateText}`)
               .fontSize(12)
               .fontColor(this.store.colors.textTertiary)
               .layoutWeight(1)
             if (this.selectedDetail.url.length > 0) {
-              Button('复制原文链接')
+              Button('浏览器打开')
+                .height(26)
+                .fontSize(11)
+                .fontColor(this.store.colors.onAccent)
+                .backgroundColor(this.store.colors.accent)
+                .borderRadius(13)
+                .padding({ left: 10, right: 10 })
+                .onClick(() => {
+                  if (this.selectedDetail !== undefined) {
+                    NativeSystemService.openExternalUrl(this.selectedDetail.url, this.getUIContext());
+                  }
+                })
+              Button('分享')
                 .height(26)
                 .fontSize(11)
                 .fontColor(this.store.colors.accent)
                 .backgroundColor(this.store.colors.accentSoft)
                 .borderRadius(13)
                 .padding({ left: 10, right: 10 })
+                .onClick(() => {
+                  if (this.selectedDetail !== undefined) {
+                    NativeSystemService.shareLink(
+                      this.selectedDetail.title,
+                      this.selectedDetail.url,
+                      this.selectedDetail.sourceName,
+                      this.getUIContext()
+                    );
+                  }
+                })
+              Button('复制')
+                .height(26)
+                .fontSize(11)
+                .fontColor(this.store.colors.textSecondary)
+                .backgroundColor(this.store.colors.surfaceAlt)
+                .border({ width: 1, color: this.store.colors.border })
+                .borderRadius(13)
+                .padding({ left: 8, right: 8 })
                 .onClick(() => {
                   if (this.selectedDetail !== undefined) {
                     this.copyUrlToClipboard(this.selectedDetail.url);
@@ -273,7 +300,7 @@ export struct AnnouncementsPage {
                 }
                 .alignItems(HorizontalAlign.Start)
                 .layoutWeight(1)
-                Text('复制')
+                Text('打开')
                   .fontSize(12)
                   .fontColor(this.store.colors.accent)
               }
@@ -282,7 +309,7 @@ export struct AnnouncementsPage {
               .borderRadius(10)
               .backgroundColor(this.store.colors.accentSoft)
               .onClick(() => {
-                this.copyUrlToClipboard(this.getLinkUrl(blk.blockValue));
+                NativeSystemService.openExternalUrl(this.getLinkUrl(blk.blockValue), this.getUIContext());
               })
             } else {
               Text(blk.blockValue)

@@ -1,0 +1,28 @@
+{
+  "forms": [
+    {
+      "name": "schedule_widget",
+      "displayName": "$string:schedule_widget_display_name",
+      "description": "$string:schedule_widget_desc",
+      "src": "./ets/widget/pages/ScheduleWidgetCard.ets",
+      "uiSyntax": "arkts",
+      "window": {
+        "designWidth": 720,
+        "autoDesignWidth": true
+      },
+      "renderingMode": "fullColor",
+      "isDefault": true,
+      "updateEnabled": true,
+      "scheduledUpdateTime": "07:30",
+      "updateDuration": 1,
+      "defaultDimension": "2*4",
+      "supportDimensions": [
+        "2*2",
+        "2*4"
+      ],
+      "formConfigAbility": "ability://EntryAbility",
+      "isDynamic": true,
+      "metadata": []
+    }
+  ]
+}

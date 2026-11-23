@@ -1,5 +1,6 @@
 import { ShuYoContributor } from '../../models/ShuYoModels';
 import { ContributorsService } from '../../services/ContributorsService';
+import { NativeSystemService } from '../../services/NativeSystemService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoTopBar } from '../../components/ShuYoCommonViews';
 
@@ -61,12 +62,21 @@ export struct ContributorsPage {
                 }
                 .alignItems(HorizontalAlign.Start)
                 .layoutWeight(1)
+
+                SymbolGlyph($r('sys.symbol.chevron_right'))
+                  .fontSize(16)
+                  .fontColor([this.store.colors.textMuted])
               }
               .width('100%')
               .padding(14)
               .borderRadius(14)
               .backgroundColor(this.store.colors.surface)
               .border({ width: 1, color: this.store.colors.border })
+              .onClick(() => {
+                if (c.login.length > 0) {
+                  NativeSystemService.openExternalUrl(`https://github.com/${c.login}`, this.getUIContext());
+                }
+              })
             }
           }, (c: ShuYoContributor, idx: number): string => `${c.login}-${idx}`)
         }

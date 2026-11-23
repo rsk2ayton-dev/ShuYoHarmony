@@ -1,4 +1,5 @@
 import { AppStorageV2 } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { ShuYoColorPalette, ShuYoThemeSpec, ShuYoThemes } from '../core/ShuYoTheme';
 import {
@@ -21,11 +22,14 @@ import {
 import { AcademicProgressService } from '../services/AcademicProgressService';
 import { AnnouncementService } from '../services/AnnouncementService';
 import { CampusCardService } from '../services/CampusCardService';
+import { ClassReminderService } from '../services/ClassReminderService';
 import { CourseRecordingService } from '../services/CourseRecordingService';
 import { CourseReviewService } from '../services/CourseReviewService';
 import { ShuYoCookieJar } from '../services/HttpClientService';
+import { NativeSystemService } from '../services/NativeSystemService';
 import { PreferencesService } from '../services/PreferencesService';
 import { ScheduleService } from '../services/ScheduleService';
+import { ScheduleWidgetService } from '../services/ScheduleWidgetService';
 import { JsonHelpers } from '../services/JsonHelpers';
 
 interface ShuYoCardCachePayload {
@@ -102,6 +106,9 @@ export class ShuYoAppStore {
   @Trace libraryBookings: ShuYoLibraryBookingRecord[] = [];
   @Trace isSyncingSchedule: boolean = false;
   @Trace statusBanner: string = '';
+  @Trace reminderEnabled: boolean = false;
+  @Trace reminderLeadMinutes: number = 15;
+  @Trace reminderStatusText: string = '';
 
   static instance(): ShuYoAppStore {
     return AppStorageV2.connect(ShuYoAppStore, 'ShuYoAppStore', () => new ShuYoAppStore())!;
@@ -202,6 +209,10 @@ export class ShuYoAppStore {
       ? '演示同学'
       : (this.isLoggedIn ? this.studentId : '未登录');
 
+    this.reminderEnabled = ClassReminderService.isEnabled();
+    this.reminderLeadMinutes = ClassReminderService.getLeadMinutes();
+    this.reminderStatusText = this.reminderEnabled ? `已开启（提前 ${this.reminderLeadMinutes} 分钟）` : '未开启';
+
     this.loadHomeLayout();
     this.loadCollections();
     this.loadBookings();
@@ -213,6 +224,7 @@ export class ShuYoAppStore {
       this.studentName = this.scheduleData.term.studentName;
     }
     this.isInitialized = true;
+    this.refreshNativeIntegrations();
     if (!this.isDemoMode) {
       this.syncAnnouncements();
       this.syncRateHome();
@@ -254,6 +266,7 @@ export class ShuYoAppStore {
     this.loadCollections();
     this.loadDataForCurrentMode();
     this.currentWeek = this.computeActualCurrentWeek();
+    this.refreshNativeIntegrations();
     this.dataRevision++;
   }
 
@@ -299,6 +312,7 @@ export class ShuYoAppStore {
     this.loadDataForCurrentMode();
     const syncMsg = await this.syncSchedule();
     this.currentWeek = this.computeActualCurrentWeek();
+    this.refreshNativeIntegrations();
     this.refreshSecondaryLiveData();
     this.dataRevision++;
     return syncMsg;
@@ -341,12 +355,14 @@ export class ShuYoAppStore {
     PreferencesService.remove(ShuYoAppStore.keyCollections);
     PreferencesService.remove(ShuYoAppStore.keyCampusCardCache);
     PreferencesService.remove(ShuYoAppStore.keyProgressCache);
+    this.refreshNativeIntegrations();
     this.dataRevision++;
   }
 
   setTheme(themeId: string): void {
     this.themeId = themeId;
     PreferencesService.setString(ShuYoAppStore.keyThemeId, themeId);
+    this.refreshNativeIntegrations();
     this.dataRevision++;
   }
 
@@ -415,6 +431,7 @@ export class ShuYoAppStore {
     this.customTermStartDate = aligned;
     PreferencesService.setString(ShuYoAppStore.keyCustomTermStartDate, aligned);
     this.currentWeek = this.computeActualCurrentWeek();
+    this.refreshNativeIntegrations();
     this.dataRevision++;
   }
 
@@ -429,7 +446,78 @@ export class ShuYoAppStore {
     this.customTermStartDate = '';
     PreferencesService.remove(ShuYoAppStore.keyCustomTermStartDate);
     this.currentWeek = this.computeActualCurrentWeek();
+    this.refreshNativeIntegrations();
     this.dataRevision++;
+  }
+
+  async setReminderEnabled(enabled: boolean, context?: common.UIAbilityContext): Promise<string> {
+    const ctx = context ?? NativeSystemService.getContext();
+    if (!enabled) {
+      this.reminderEnabled = false;
+      const msg = await ClassReminderService.disableAll();
+      this.reminderStatusText = msg;
+      this.dataRevision++;
+      return msg;
+    }
+    const msg = await ClassReminderService.syncReminders(
+      ctx,
+      this.scheduleData,
+      this.getEffectiveTermStartDate(),
+      this.getEffectiveMaxWeek(),
+      true
+    );
+    this.reminderEnabled = ClassReminderService.isEnabled();
+    this.reminderStatusText = msg;
+    this.dataRevision++;
+    return msg;
+  }
+
+  async setReminderLeadMinutes(mins: number, context?: common.UIAbilityContext): Promise<string> {
+    ClassReminderService.setLeadMinutes(mins);
+    this.reminderLeadMinutes = ClassReminderService.getLeadMinutes();
+    if (!this.reminderEnabled) {
+      this.reminderStatusText = `提前 ${this.reminderLeadMinutes} 分钟（未开启）`;
+      this.dataRevision++;
+      return this.reminderStatusText;
+    }
+    const ctx = context ?? NativeSystemService.getContext();
+    const msg = await ClassReminderService.syncReminders(
+      ctx,
+      this.scheduleData,
+      this.getEffectiveTermStartDate(),
+      this.getEffectiveMaxWeek(),
+      false
+    );
+    this.reminderStatusText = msg;
+    this.dataRevision++;
+    return msg;
+  }
+
+  refreshNativeIntegrations(): void {
+    const startDate = this.getEffectiveTermStartDate();
+    const maxW = this.getEffectiveMaxWeek();
+    ScheduleWidgetService.persistSnapshot(
+      this.scheduleData,
+      startDate,
+      maxW,
+      this.colors,
+      this.isDemoMode
+    );
+    const ctx = NativeSystemService.getContext();
+    if (ctx !== undefined) {
+      ScheduleWidgetService.reloadWidgets(ctx).catch(() => {});
+    }
+    if (this.reminderEnabled) {
+      ClassReminderService.syncReminders(
+        ctx,
+        this.scheduleData,
+        startDate,
+        maxW,
+        false
+      ).then((msg: string) => {
+        this.reminderStatusText = msg;
+      }).catch(() => {});
+    }
   }
 
   setCurrentWeek(week: number): void {
@@ -712,6 +800,7 @@ export class ShuYoAppStore {
     if (this.isDemoMode) {
       this.rateHome = CourseReviewService.buildDemoHome(this.scheduleData);
     }
+    this.refreshNativeIntegrations();
     this.dataRevision++;
   }
 
@@ -763,6 +852,7 @@ export class ShuYoAppStore {
         this.activeCollectionId = collectionId;
         this.scheduleData = this.scheduleCollections[i].schedule;
         this.currentWeek = this.computeActualCurrentWeek();
+        this.refreshNativeIntegrations();
         this.dataRevision++;
         return;
       }
@@ -783,6 +873,7 @@ export class ShuYoAppStore {
     this.activeCollectionId = id;
     this.scheduleData = schedule;
     this.persistCollections();
+    this.refreshNativeIntegrations();
     this.dataRevision++;
   }
 
@@ -802,6 +893,7 @@ export class ShuYoAppStore {
       this.scheduleData = next[0].schedule;
     }
     this.persistCollections();
+    this.refreshNativeIntegrations();
     this.dataRevision++;
   }
 
