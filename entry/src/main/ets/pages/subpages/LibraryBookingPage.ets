@@ -1,17 +1,16 @@
-import { LengthMetrics } from '@kit.ArkUI';
+import { ShuYoGlass } from '../../core/ShuYoMotionGlass';
 import {
   ShuYoLibraryArea,
   ShuYoLibraryBookingRecord,
   ShuYoLibrarySeat,
   ShuYoLibraryVenue
 } from '../../models/ShuYoModels';
-import { LibraryBookingService } from '../../services/LibraryBookingService';
+import { LibraryBookingService, ShuYoThereFailure } from '../../services/LibraryBookingService';
 import {
   LibraryFloorPlanLayout,
-  ShuYoFloorPlanPoint,
-  ShuYoSeatNeighborSummary
+  ShuYoFloorPlanPoint
 } from '../../services/LibraryFloorPlanLayout';
-import { LibraryFloorPlanView } from '../../components/LibraryFloorPlanView';
+import { LibraryFloorPlanView, LibrarySeatTicketCard } from '../../components/LibraryFloorPlanView';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoEmptyState, ShuYoTopBar } from '../../components/ShuYoCommonViews';
 
@@ -37,6 +36,7 @@ export struct LibraryBookingPage {
   @Local pointMap: Map<string, ShuYoFloorPlanPoint> = new Map<string, ShuYoFloorPlanPoint>();
   @Local quietCount: number = 0;
   @Local isLiveMode: boolean = false;
+  @Local slotFailure: ShuYoThereFailure = ShuYoThereFailure.NONE;
   @Local dataStatusText: string = '正在加载座位分布...';
   @Local isLoadingSeats: boolean = false;
   @Local isSubmittingBooking: boolean = false;
@@ -179,6 +179,7 @@ export struct LibraryBookingPage {
     }
     this.activeArea = res.activeArea;
     this.isLiveMode = res.isLive;
+    this.slotFailure = res.failure !== undefined ? res.failure : ShuYoThereFailure.NONE;
     this.dataStatusText = res.statusText;
     this.rebuildAreaPoints();
     this.isLoadingSeats = false;
@@ -352,20 +353,6 @@ export struct LibraryBookingPage {
     return !seat.isDisabled && !seat.isBusy && !seat.isBooked;
   }
 
-  private buildMatrixNeighborText(pt: ShuYoFloorPlanPoint): string {
-    const parts: string[] = [];
-    if (pt.leftNeighbor !== undefined) {
-      parts.push(`连号前位 ${pt.leftNeighbor.label} ${pt.leftNeighbor.statusText}`);
-    }
-    if (pt.rightNeighbor !== undefined) {
-      parts.push(`连号后位 ${pt.rightNeighbor.label} ${pt.rightNeighbor.statusText}`);
-    }
-    if (parts.length === 0) {
-      return '暂无连号相邻席位信息（以现场桌位为准）';
-    }
-    return `${parts.join(' · ')}（以现场桌位为准）`;
-  }
-
   private async confirmBookSelectedSeat(): Promise<void> {
     const seat = this.findSelectedSeat();
     if (seat === undefined) {
@@ -420,113 +407,6 @@ export struct LibraryBookingPage {
       }
     }
     return busy;
-  }
-
-  @Builder
-  private neighborStatusChip(prefix: string, summary: ShuYoSeatNeighborSummary) {
-    Text(`${prefix} ${summary.label} ${summary.statusText}`)
-      .fontSize(11)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(summary.isFree ? '#15803D' : '#B91C1C')
-      .backgroundColor(summary.isFree ? '#DCFCE7' : '#FEE2E2')
-      .borderRadius(8)
-      .padding({ left: 7, right: 7, top: 3, bottom: 3 })
-  }
-
-  @Builder
-  private cinemaTicketSelectionCard(pt: ShuYoFloorPlanPoint, compact: boolean) {
-    Column({ space: 8 }) {
-      Row({ space: 10 }) {
-        Column({ space: 3 }) {
-          Row({ space: 6 }) {
-            Text(pt.normalizedCode)
-              .fontSize(compact ? 16 : 17)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(this.store.colors.textPrimary)
-
-            if (pt.isQuiet) {
-              Text('✨ 邻座皆空')
-                .fontSize(10.5)
-                .fontWeight(FontWeight.Medium)
-                .fontColor('#065F46')
-                .backgroundColor('#D1FAE5')
-                .borderRadius(8)
-                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            } else if (this.isSeatBookable(pt.seat) && (pt.leftNeighbor !== undefined || pt.rightNeighbor !== undefined)) {
-              Text('邻座有人')
-                .fontSize(10.5)
-                .fontWeight(FontWeight.Medium)
-                .fontColor('#92400E')
-                .backgroundColor('#FEF3C7')
-                .borderRadius(8)
-                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            }
-
-            Text(this.getSeatStatusLabel(pt.seat))
-              .fontSize(10.5)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(this.getSeatCardText(pt.seat))
-          }
-
-          Text(`${pt.zoneHint} · ${this.selectedDay} ${this.selectedStartTime}-${this.selectedEndTime}`)
-            .fontSize(11.5)
-            .fontColor(this.store.colors.textTertiary)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-
-        Button(this.isSubmittingBooking
-          ? '提交中...'
-          : (this.isSeatBookable(pt.seat) ? '预约此座' : '不可预约'))
-          .height(36)
-          .fontSize(13)
-          .enabled(this.isSeatBookable(pt.seat) && !this.isSubmittingBooking)
-          .fontColor(this.store.colors.onAccent)
-          .backgroundColor(
-            this.isSeatBookable(pt.seat)
-              ? '#16A34A'
-              : this.store.colors.disabledFill
-          )
-          .borderRadius(10)
-          .padding({ left: 14, right: 14 })
-          .onClick(() => {
-            this.confirmBookSelectedSeat();
-          })
-      }
-      .width('100%')
-
-      if (pt.isRealFloorPlan) {
-        if (pt.leftNeighbor !== undefined || pt.rightNeighbor !== undefined || pt.oppositeNeighbor !== undefined) {
-          Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(6), cross: LengthMetrics.vp(6) } }) {
-            if (pt.leftNeighbor !== undefined) {
-              this.neighborStatusChip('左邻', pt.leftNeighbor)
-            }
-            if (pt.rightNeighbor !== undefined) {
-              this.neighborStatusChip('右邻', pt.rightNeighbor)
-            }
-            if (pt.oppositeNeighbor !== undefined) {
-              this.neighborStatusChip('对面', pt.oppositeNeighbor)
-            }
-          }
-          .width('100%')
-        } else {
-          Text('独立圆台席位 · 无贴靠邻座')
-            .fontSize(11)
-            .fontColor('#059669')
-        }
-      } else {
-        Text(this.buildMatrixNeighborText(pt))
-          .fontSize(11)
-          .fontColor(this.store.colors.textSecondary)
-      }
-    }
-    .width('100%')
-    .padding(compact ? 12 : 14)
-    .borderRadius(14)
-    .backgroundColor(compact ? this.store.colors.surfaceAlt : this.store.colors.surface)
-    .border({ width: 1.5, color: this.getSeatCardBorder(pt.seat) })
   }
 
   @Builder
@@ -602,12 +482,23 @@ export struct LibraryBookingPage {
       }
 
       if (this.selectedPoint !== undefined) {
-        this.cinemaTicketSelectionCard(this.selectedPoint, true)
+        LibrarySeatTicketCard({
+          point: this.selectedPoint,
+          selectedDay: this.selectedDay,
+          selectedStartTime: this.selectedStartTime,
+          selectedEndTime: this.selectedEndTime,
+          isSubmitting: this.isSubmittingBooking,
+          compact: true,
+          onBookTap: () => {
+            this.confirmBookSelectedSeat();
+          }
+        })
       }
     }
     .width('100%')
+    .height('100%')
     .padding({ left: 16, right: 16, top: 8, bottom: 24 })
-    .backgroundColor(this.store.colors.surface)
+    .backgroundColor(Color.Transparent)
   }
 
   build() {
@@ -821,11 +712,12 @@ export struct LibraryBookingPage {
                   Text('开始')
                     .fontSize(11)
                     .fontColor(this.store.colors.textTertiary)
-                  Button('-')
-                    .width(24)
-                    .height(24)
-                    .padding(0)
-                    .fontSize(12)
+                  Text('−')
+                    .width(28)
+                    .height(28)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Bold)
+                    .textAlign(TextAlign.Center)
                     .fontColor(this.store.colors.textPrimary)
                     .backgroundColor(this.store.colors.surfaceAlt)
                     .borderRadius(8)
@@ -836,11 +728,12 @@ export struct LibraryBookingPage {
                     .fontSize(13)
                     .fontWeight(FontWeight.Bold)
                     .fontColor(this.store.colors.accent)
-                  Button('+')
-                    .width(24)
-                    .height(24)
-                    .padding(0)
-                    .fontSize(12)
+                  Text('+')
+                    .width(28)
+                    .height(28)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Bold)
+                    .textAlign(TextAlign.Center)
                     .fontColor(this.store.colors.textPrimary)
                     .backgroundColor(this.store.colors.surfaceAlt)
                     .borderRadius(8)
@@ -855,11 +748,12 @@ export struct LibraryBookingPage {
                   Text('结束')
                     .fontSize(11)
                     .fontColor(this.store.colors.textTertiary)
-                  Button('-')
-                    .width(24)
-                    .height(24)
-                    .padding(0)
-                    .fontSize(12)
+                  Text('−')
+                    .width(28)
+                    .height(28)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Bold)
+                    .textAlign(TextAlign.Center)
                     .fontColor(this.store.colors.textPrimary)
                     .backgroundColor(this.store.colors.surfaceAlt)
                     .borderRadius(8)
@@ -870,11 +764,12 @@ export struct LibraryBookingPage {
                     .fontSize(13)
                     .fontWeight(FontWeight.Bold)
                     .fontColor(this.store.colors.accent)
-                  Button('+')
-                    .width(24)
-                    .height(24)
-                    .padding(0)
-                    .fontSize(12)
+                  Text('+')
+                    .width(28)
+                    .height(28)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Bold)
+                    .textAlign(TextAlign.Center)
                     .fontColor(this.store.colors.textPrimary)
                     .backgroundColor(this.store.colors.surfaceAlt)
                     .borderRadius(8)
@@ -887,10 +782,42 @@ export struct LibraryBookingPage {
                 Row({ space: 8 }) {
                   Text(this.dataStatusText)
                     .fontSize(11)
-                    .fontColor(this.isLiveMode ? '#16A34A' : this.store.colors.textTertiary)
+                    .fontColor(this.isLiveMode
+                      ? '#16A34A'
+                      : (this.slotFailure === ShuYoThereFailure.NONE
+                        ? this.store.colors.textTertiary
+                        : this.store.colors.danger))
                     .layoutWeight(1)
-                    .maxLines(1)
+                    .maxLines(2)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  if (this.slotFailure === ShuYoThereFailure.WEBVPN_EXPIRED) {
+                    Button('关 WebVPN')
+                      .height(24)
+                      .fontSize(11)
+                      .fontColor(this.store.colors.onDanger)
+                      .backgroundColor(this.store.colors.danger)
+                      .borderRadius(12)
+                      .padding({ left: 10, right: 10 })
+                      .onClick(() => {
+                        this.store.setUseWebVpn(false);
+                        this.reloadSeatAvailability();
+                      })
+                  }
+                  if (!this.store.useWebVpn &&
+                    (this.slotFailure === ShuYoThereFailure.UNREACHABLE ||
+                      this.slotFailure === ShuYoThereFailure.UNCERTAIN)) {
+                    Button('开 WebVPN')
+                      .height(24)
+                      .fontSize(11)
+                      .fontColor(this.store.colors.accent)
+                      .backgroundColor(this.store.colors.accentSoft)
+                      .borderRadius(12)
+                      .padding({ left: 10, right: 10 })
+                      .onClick(() => {
+                        this.store.setUseWebVpn(true);
+                        this.reloadSeatAvailability();
+                      })
+                  }
                   Button('刷新空位')
                     .height(24)
                     .fontSize(11)
@@ -994,8 +921,9 @@ export struct LibraryBookingPage {
                   // 3-way segmented filter strip: 全部 / 仅空闲 / ✨ 清静位(邻座空)
                   Row({ space: 6 }) {
                     Button('全部')
-                      .layoutWeight(1)
+                      .layoutWeight(0.72)
                       .height(28)
+                      .padding({ left: 6, right: 6 })
                       .fontSize(11)
                       .fontColor(this.getFilterText(0))
                       .backgroundColor(this.getFilterBg(0))
@@ -1004,9 +932,10 @@ export struct LibraryBookingPage {
                         this.filterMode = 0;
                         this.floorRevision++;
                       })
-                    Button(`仅空闲 (${this.getCurrentArea()!.freeCount})`)
-                      .layoutWeight(1)
+                    Button(`仅空闲 ${this.getCurrentArea()!.freeCount}`)
+                      .layoutWeight(1.0)
                       .height(28)
+                      .padding({ left: 6, right: 6 })
                       .fontSize(11)
                       .fontColor(this.getFilterText(1))
                       .backgroundColor(this.getFilterBg(1))
@@ -1015,9 +944,10 @@ export struct LibraryBookingPage {
                         this.filterMode = 1;
                         this.floorRevision++;
                       })
-                    Button(`✨ 清静位(邻空 ${this.quietCount})`)
-                      .layoutWeight(1.3)
+                    Button(`✨ 清静位 ${this.quietCount}`)
+                      .layoutWeight(1.28)
                       .height(28)
+                      .padding({ left: 6, right: 6 })
                       .fontSize(11)
                       .fontColor(this.getFilterText(2))
                       .backgroundColor(this.getFilterBg(2))
@@ -1117,7 +1047,17 @@ export struct LibraryBookingPage {
 
               // Bottom Cinema-Ticket Selected Seat Bar
               if (this.selectedPoint !== undefined) {
-                this.cinemaTicketSelectionCard(this.selectedPoint, false)
+                LibrarySeatTicketCard({
+                  point: this.selectedPoint,
+                  selectedDay: this.selectedDay,
+                  selectedStartTime: this.selectedStartTime,
+                  selectedEndTime: this.selectedEndTime,
+                  isSubmitting: this.isSubmittingBooking,
+                  compact: false,
+                  onBookTap: () => {
+                    this.confirmBookSelectedSeat();
+                  }
+                })
               }
             }
             .width('100%')
@@ -1266,11 +1206,16 @@ export struct LibraryBookingPage {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(this.store.colors.background)
+      .linearGradient({
+        angle: 165,
+        colors: ShuYoGlass.ambientGradientColors(this.store.colors)
+      })
       .bindSheet($$this.showFullScreenMapSheet, this.fullScreenMapSheetBuilder(), {
         height: SheetSize.LARGE,
         dragBar: true,
-        showClose: true
+        showClose: true,
+        backgroundColor: Color.Transparent,
+        systemMaterial: ShuYoGlass.sheetMaterial()
       })
     }
     .hideTitleBar(true)

@@ -13,13 +13,21 @@
 - **校园工具箱**：空教室查询、校园一卡通（真实余额与近 90 天分片账单同步）、图书馆座位预约与规则/问答指引、宝山/嘉定/延长三校区矢量地图、动态口令（OTP）、通知公告。
 - **外观与定制**：多套主题配色（含 Material Design 3）、深浅色模式、首页模块排版自定义。
 
+## 已知问题与下一步目标
+
+本版（`v0.6.0.2` 毛玻璃版）已完成鸿蒙原生毛玻璃/液态玻璃动效与性能优化，目前可正常查看图书馆各区域座位空闲与平面图分布情况。下一步研发重心聚焦以下三项（其余模块暂保持现状不动）：
+
+1. **WebVPN 适配**：打通校外 WebVPN 认证与接口访问链路。
+2. **图书馆座位预约提交**：补齐实时选座后的预约提交闭环。
+3. **通知公告滑动问题修复**：排查并修复通知部分无法上下滑动的问题。
+
 ## 项目信息
 
 | 项目属性 | 说明 |
 |---|---|
 | 应用名称 | `SHU友` |
 | Bundle Name | `com.rsk2ayton.shuyo.harmony` |
-| 当前版本 | `v0.5.3`（`versionCode: 1000002`） |
+| 当前版本 | `v0.6.0.2`（`versionCode: 1000005`） |
 | 目标 / 兼容 SDK | `HarmonyOS 26.0.0`（Stage 模型 / ArkUI V2） |
 | 支持设备 | `phone` |
 
@@ -28,7 +36,7 @@
 前往本仓库的 [Releases 页面](https://github.com/rsk2ayton-dev/ShuYoHarmony/releases) 下载对应版本的安装包。
 
 > [!NOTE]
-> Release 附件中的 `ShuYoHarmony-v0.5.3-unsigned.hap` 为**未签名（unsigned）** HAP 安装包（本仓库不包含签名密钥）。  
+> Release 附件中的 `ShuYoHarmony-v0.6.0.2-unsigned.hap` 为**未签名（unsigned）** HAP 安装包（本仓库不包含签名密钥）。  
 > 如需在真机安装运行，请在 DevEco Studio 中配置自动签名（或执行 `devecocli signature generate` 后运行 `devecocli run`），或使用您自己的 HarmonyOS 签名证书与 Profile 对 HAP 进行签名后再安装。
 
 ## 构建与开发

@@ -3,6 +3,7 @@ import {
   ShuYoLoginPageParam,
   ShuYoTabId
 } from '../models/ShuYoModels';
+import { ShuYoGlass, ShuYoMotion } from '../core/ShuYoMotionGlass';
 import { NativeSystemService } from '../services/NativeSystemService';
 import { ShuYoAppStore } from '../store/ShuYoAppStore';
 import { HomeDashboardView } from './tabs/HomeDashboardView';
@@ -15,6 +16,10 @@ import { AcademicScheduleView } from './tabs/AcademicScheduleView';
 struct Index {
   @Local navStack: NavPathStack = new NavPathStack();
   @Local selectedSystemOnboard: ShuYoCampusSystem = ShuYoCampusSystem.UNDERGRADUATE;
+  @Local mountedHome: boolean = true;
+  @Local mountedRate: boolean = false;
+  @Local mountedProgress: boolean = false;
+  @Local mountedSchedule: boolean = false;
   private store: ShuYoAppStore = ShuYoAppStore.instance();
 
   aboutToAppear(): void {
@@ -22,6 +27,32 @@ struct Index {
     if (NativeSystemService.consumePendingLaunchTab() === 'schedule') {
       this.store.switchToScheduleTab();
     }
+    this.markTabMounted(this.getActiveTabId());
+  }
+
+  private markTabMounted(tabId: ShuYoTabId): void {
+    if (tabId === ShuYoTabId.HOME) {
+      this.mountedHome = true;
+    } else if (tabId === ShuYoTabId.RATE) {
+      this.mountedRate = true;
+    } else if (tabId === ShuYoTabId.PROGRESS) {
+      this.mountedProgress = true;
+    } else if (tabId === ShuYoTabId.SCHEDULE) {
+      this.mountedSchedule = true;
+    }
+  }
+
+  private switchTabWithMotion(idx: number): void {
+    const tabs = this.store.supportedTabs;
+    if (idx >= 0 && idx < tabs.length) {
+      this.markTabMounted(tabs[idx]);
+    }
+    this.getUIContext()?.animateTo({
+      duration: 260,
+      curve: ShuYoMotion.snappySpring
+    }, () => {
+      this.store.setActiveTabIndex(idx);
+    });
   }
 
   private getTabLabel(tabId: ShuYoTabId): string {
@@ -69,25 +100,17 @@ struct Index {
     this.navStack.pushDestination({ name: 'NativeLoginPage', param: param }).catch(() => {});
   }
 
-  @Builder
-  private renderTabSymbol(tabId: ShuYoTabId, active: boolean) {
+  private getTabSymbolResource(tabId: ShuYoTabId, active: boolean): Resource {
     if (tabId === ShuYoTabId.HOME) {
-      SymbolGlyph($r(active ? 'sys.symbol.house_fill' : 'sys.symbol.house'))
-        .fontSize(22)
-        .fontColor([active ? this.store.colors.navSelected : this.store.colors.navUnselected])
-    } else if (tabId === ShuYoTabId.RATE) {
-      SymbolGlyph($r(active ? 'sys.symbol.star_fill' : 'sys.symbol.star'))
-        .fontSize(22)
-        .fontColor([active ? this.store.colors.navSelected : this.store.colors.navUnselected])
-    } else if (tabId === ShuYoTabId.PROGRESS) {
-      SymbolGlyph($r('sys.symbol.doc_text'))
-        .fontSize(22)
-        .fontColor([active ? this.store.colors.navSelected : this.store.colors.navUnselected])
-    } else {
-      SymbolGlyph($r(active ? 'sys.symbol.calendar_fill' : 'sys.symbol.calendar'))
-        .fontSize(22)
-        .fontColor([active ? this.store.colors.navSelected : this.store.colors.navUnselected])
+      return $r(active ? 'sys.symbol.house_fill' : 'sys.symbol.house');
     }
+    if (tabId === ShuYoTabId.RATE) {
+      return $r(active ? 'sys.symbol.star_fill' : 'sys.symbol.star');
+    }
+    if (tabId === ShuYoTabId.PROGRESS) {
+      return $r('sys.symbol.doc_text');
+    }
+    return $r(active ? 'sys.symbol.calendar_fill' : 'sys.symbol.calendar');
   }
 
   @Builder
@@ -120,9 +143,9 @@ struct Index {
         }
         .width('100%')
         .padding(16)
-        .borderRadius(16)
-        .backgroundColor(this.store.colors.surface)
-        .border({ width: 1, color: this.store.colors.border })
+        .borderRadius(18)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(ShuYoGlass.floatingCardMaterial(this.store.colors.isDark))
 
         // Campus system selection
         Column({ space: 8 }) {
@@ -138,6 +161,7 @@ struct Index {
               .fontColor(this.getSystemBtnText(ShuYoCampusSystem.UNDERGRADUATE))
               .backgroundColor(this.getSystemBtnBg(ShuYoCampusSystem.UNDERGRADUATE))
               .borderRadius(12)
+              .clickEffect(ShuYoMotion.lightClick)
               .onClick(() => {
                 this.selectedSystemOnboard = ShuYoCampusSystem.UNDERGRADUATE;
               })
@@ -148,6 +172,7 @@ struct Index {
               .fontColor(this.getSystemBtnText(ShuYoCampusSystem.GRADUATE))
               .backgroundColor(this.getSystemBtnBg(ShuYoCampusSystem.GRADUATE))
               .borderRadius(12)
+              .clickEffect(ShuYoMotion.lightClick)
               .onClick(() => {
                 this.selectedSystemOnboard = ShuYoCampusSystem.GRADUATE;
               })
@@ -166,6 +191,7 @@ struct Index {
             .fontColor(this.store.colors.onAccent)
             .backgroundColor(this.store.colors.accent)
             .borderRadius(14)
+            .clickEffect(ShuYoMotion.lightClick)
             .onClick(() => {
               this.openLoginFromOnboard();
             })
@@ -176,9 +202,10 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
             .fontColor(this.store.colors.textPrimary)
-            .backgroundColor(this.store.colors.surface)
+            .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
             .border({ width: 1, color: this.store.colors.borderStrong })
             .borderRadius(14)
+            .clickEffect(ShuYoMotion.lightClick)
             .onClick(() => {
               this.store.enterDemoMode(this.selectedSystemOnboard);
             })
@@ -191,7 +218,10 @@ struct Index {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.store.colors.background)
+    .linearGradient({
+      angle: 165,
+      colors: ShuYoGlass.ambientGradientColors(this.store.colors)
+    })
     .scrollBar(BarState.Off)
   }
 
@@ -222,45 +252,123 @@ struct Index {
       if (!this.store.hasCompletedOnboarding) {
         this.renderOnboarding()
       } else {
-        Column() {
-          // Tab content
+        Stack({ alignContent: Alignment.Bottom }) {
+          // Persistent lazy-mounted tabs layered over ambient gradient wash
           Stack({ alignContent: Alignment.TopStart }) {
-            if (this.getActiveTabId() === ShuYoTabId.HOME) {
-              HomeDashboardView({ navStack: this.navStack })
-            } else if (this.getActiveTabId() === ShuYoTabId.RATE) {
-              RateHomeView({ navStack: this.navStack })
-            } else if (this.getActiveTabId() === ShuYoTabId.PROGRESS) {
-              AcademicProgressView({ navStack: this.navStack })
-            } else {
-              AcademicScheduleView({ navStack: this.navStack })
+            if (this.mountedHome || this.getActiveTabId() === ShuYoTabId.HOME) {
+              Column() {
+                HomeDashboardView({ navStack: this.navStack })
+              }
+              .width('100%')
+              .height('100%')
+              .visibility(this.getActiveTabId() === ShuYoTabId.HOME ? Visibility.Visible : Visibility.None)
+              .opacity(this.getActiveTabId() === ShuYoTabId.HOME ? 1 : 0)
+              .animation({ duration: 200, curve: Curve.FastOutSlowIn })
+              .onAppear(() => {
+                this.mountedHome = true;
+              })
+            }
+
+            if (this.mountedRate || this.getActiveTabId() === ShuYoTabId.RATE) {
+              Column() {
+                RateHomeView({ navStack: this.navStack })
+              }
+              .width('100%')
+              .height('100%')
+              .visibility(this.getActiveTabId() === ShuYoTabId.RATE ? Visibility.Visible : Visibility.None)
+              .opacity(this.getActiveTabId() === ShuYoTabId.RATE ? 1 : 0)
+              .animation({ duration: 200, curve: Curve.FastOutSlowIn })
+              .onAppear(() => {
+                this.mountedRate = true;
+              })
+            }
+
+            if (this.mountedProgress || this.getActiveTabId() === ShuYoTabId.PROGRESS) {
+              Column() {
+                AcademicProgressView({ navStack: this.navStack })
+              }
+              .width('100%')
+              .height('100%')
+              .visibility(this.getActiveTabId() === ShuYoTabId.PROGRESS ? Visibility.Visible : Visibility.None)
+              .opacity(this.getActiveTabId() === ShuYoTabId.PROGRESS ? 1 : 0)
+              .animation({ duration: 200, curve: Curve.FastOutSlowIn })
+              .onAppear(() => {
+                this.mountedProgress = true;
+              })
+            }
+
+            if (this.mountedSchedule || this.getActiveTabId() === ShuYoTabId.SCHEDULE) {
+              Column() {
+                AcademicScheduleView({ navStack: this.navStack })
+              }
+              .width('100%')
+              .height('100%')
+              .visibility(this.getActiveTabId() === ShuYoTabId.SCHEDULE ? Visibility.Visible : Visibility.None)
+              .opacity(this.getActiveTabId() === ShuYoTabId.SCHEDULE ? 1 : 0)
+              .animation({ duration: 200, curve: Curve.FastOutSlowIn })
+              .onAppear(() => {
+                this.mountedSchedule = true;
+              })
             }
           }
-          .layoutWeight(1)
           .width('100%')
+          .height('100%')
+          .linearGradient({
+            angle: 165,
+            colors: ShuYoGlass.ambientGradientColors(this.store.colors)
+          })
 
-          // Custom bottom navigation bar
+          // Floating HarmonyOS 7.0 liquid glass bottom dock
           Row() {
             ForEach(this.store.supportedTabs, (tabId: ShuYoTabId, idx: number) => {
-              Column({ space: 3 }) {
-                this.renderTabSymbol(tabId, this.store.activeTabIndex === idx)
+              Column({ space: 2 }) {
+                SymbolGlyph(this.getTabSymbolResource(tabId, this.store.activeTabIndex === idx))
+                  .fontSize(21)
+                  .fontColor([this.getTabColor(idx)])
+                  .scale({
+                    x: this.store.activeTabIndex === idx ? 1.08 : 1.0,
+                    y: this.store.activeTabIndex === idx ? 1.08 : 1.0
+                  })
+                  .animation({ duration: 240, curve: ShuYoMotion.snappySpring })
                 Text(this.getTabLabel(tabId))
-                  .fontSize(11)
-                  .fontWeight(this.store.activeTabIndex === idx ? FontWeight.Bold : FontWeight.Normal)
+                  .fontSize(10.5)
+                  .fontWeight(this.store.activeTabIndex === idx ? FontWeight.Bold : FontWeight.Medium)
                   .fontColor(this.getTabColor(idx))
               }
               .layoutWeight(1)
-              .height(56)
+              .height(50)
               .justifyContent(FlexAlign.Center)
               .alignItems(HorizontalAlign.Center)
+              .borderRadius(22)
+              .backgroundColor(
+                this.store.activeTabIndex === idx
+                  ? (this.store.colors.isDark ? '#30FFFFFF' : '#EBFFFFFF')
+                  : Color.Transparent
+              )
+              .animation({ duration: 240, curve: ShuYoMotion.snappySpring })
+              .clickEffect(ShuYoMotion.snappyClick)
               .onClick(() => {
-                this.store.setActiveTabIndex(idx);
+                this.switchTabWithMotion(idx);
               })
-            }, (tabId: ShuYoTabId, idx: number): string => `${tabId}-${idx}-${this.store.activeTabIndex}-${this.store.dataRevision}`)
+            }, (tabId: ShuYoTabId): string => tabId)
           }
-          .width('100%')
-          .height(60)
-          .backgroundColor(this.store.colors.surface)
-          .border({ width: { top: 0.5 }, color: this.store.colors.border })
+          .height(62)
+          .borderRadius(31)
+          .margin({ left: 16, right: 16, bottom: 10 })
+          .padding({ left: 8, right: 8 })
+          .alignItems(VerticalAlign.Center)
+          .backgroundColor(Color.Transparent)
+          .backgroundEffect(ShuYoGlass.floatingDockBlur(this.store.colors.isDark))
+          .border({
+            width: 1,
+            color: this.store.colors.isDark ? '#38FFFFFF' : '#E6FFFFFF'
+          })
+          .shadow({
+            radius: 24,
+            color: this.store.colors.isDark ? '#66000000' : '#1E0F172A',
+            offsetX: 0,
+            offsetY: 8
+          })
         }
         .width('100%')
         .height('100%')

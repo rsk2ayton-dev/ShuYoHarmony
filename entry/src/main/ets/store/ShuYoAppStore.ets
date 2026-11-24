@@ -22,14 +22,17 @@ import {
 import { AcademicProgressService } from '../services/AcademicProgressService';
 import { AnnouncementService } from '../services/AnnouncementService';
 import { CampusCardService } from '../services/CampusCardService';
+import { ChaoxingBookingService } from '../services/ChaoxingBookingService';
 import { ClassReminderService } from '../services/ClassReminderService';
 import { CourseRecordingService } from '../services/CourseRecordingService';
 import { CourseReviewService } from '../services/CourseReviewService';
 import { ShuYoCookieJar } from '../services/HttpClientService';
+import { LibraryBookingService } from '../services/LibraryBookingService';
 import { NativeSystemService } from '../services/NativeSystemService';
 import { PreferencesService } from '../services/PreferencesService';
 import { ScheduleService } from '../services/ScheduleService';
 import { ScheduleWidgetService } from '../services/ScheduleWidgetService';
+import { WebVpnAuthService } from '../services/WebVpnAuthService';
 import { JsonHelpers } from '../services/JsonHelpers';
 
 interface ShuYoCardCachePayload {
@@ -288,6 +291,9 @@ export class ShuYoAppStore {
     CampusCardService.clearSession();
     CourseRecordingService.clearSession();
     CourseReviewService.clearStudentToken();
+    LibraryBookingService.clearSession();
+    ChaoxingBookingService.clearSession();
+    WebVpnAuthService.clearSession();
     PreferencesService.remove(ShuYoAppStore.keyCampusCardCache);
     PreferencesService.remove(ShuYoAppStore.keyProgressCache);
     this.cardInfo = CampusCardService.emptyCardInfo(studentId);
@@ -323,6 +329,9 @@ export class ShuYoAppStore {
     CampusCardService.clearSession();
     CourseRecordingService.clearSession();
     CourseReviewService.clearStudentToken();
+    LibraryBookingService.clearSession();
+    ChaoxingBookingService.clearSession();
+    WebVpnAuthService.clearSession();
     this.isLoggedIn = false;
     this.isDemoMode = false;
     this.studentId = '';

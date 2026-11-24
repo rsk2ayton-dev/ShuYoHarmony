@@ -1,4 +1,5 @@
 import { ShuYoConstants } from '../../core/ShuYoConstants';
+import { ShuYoGlass, ShuYoMotion } from '../../core/ShuYoMotionGlass';
 import { ShuYoThemes } from '../../core/ShuYoTheme';
 import {
   ShuYoAnnouncementItem,
@@ -105,7 +106,22 @@ export struct HomeDashboardView {
     return this.store.colors.textTertiary;
   }
 
-  private getEnabledModules(): ShuYoHomeLayoutItem[] {
+  @Computed
+  get todaySessions(): ShuYoCourseSession[] {
+    const _rev = this.store.dataRevision;
+    const _wk = this.store.currentWeek;
+    return this.store.sessionsForToday();
+  }
+
+  @Computed
+  get previewAnnouncements(): ShuYoAnnouncementItem[] {
+    const _rev = this.store.dataRevision;
+    return this.store.announcements.slice(0, 3);
+  }
+
+  @Computed
+  get enabledModules(): ShuYoHomeLayoutItem[] {
+    const _rev = this.store.dataRevision;
     const list: ShuYoHomeLayoutItem[] = [];
     for (let i = 0; i < this.store.homeLayout.length; i++) {
       if (this.store.homeLayout[i].enabled) {
@@ -156,7 +172,7 @@ export struct HomeDashboardView {
         }
       })
 
-      if (this.store.sessionsForToday().length === 0) {
+      if (this.todaySessions.length === 0) {
         Row({ space: 10 }) {
           SymbolGlyph($r('sys.symbol.calendar'))
             .fontSize(20)
@@ -169,7 +185,7 @@ export struct HomeDashboardView {
         .padding({ top: 8, bottom: 8 })
       } else {
         Column({ space: 8 }) {
-          ForEach(this.store.sessionsForToday(), (session: ShuYoCourseSession, idx: number) => {
+          ForEach(this.todaySessions, (session: ShuYoCourseSession, idx: number) => {
             Row({ space: 10 }) {
               Column()
                 .width(4)
@@ -208,6 +224,7 @@ export struct HomeDashboardView {
             .padding(10)
             .borderRadius(12)
             .backgroundColor(this.store.colors.surfaceAlt)
+            .clickEffect(ShuYoMotion.lightClick)
             .onClick(() => {
               this.store.switchToScheduleTab();
             })
@@ -218,9 +235,10 @@ export struct HomeDashboardView {
     }
     .width('100%')
     .padding(16)
-    .borderRadius(16)
-    .backgroundColor(this.store.colors.surface)
-    .border({ width: 1, color: this.store.colors.border })
+    .borderRadius(18)
+    .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+    .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
+    .shadow(ShadowStyle.OUTER_DEFAULT_XS)
   }
 
   @Builder
@@ -271,9 +289,16 @@ export struct HomeDashboardView {
     }
     .width('100%')
     .padding(16)
-    .borderRadius(16)
-    .backgroundColor(this.store.colors.surface)
-    .border({ width: 1, color: this.store.colors.border })
+    .borderRadius(18)
+    .linearGradient({
+      angle: 135,
+      colors: this.store.colors.isDark
+        ? [['#D8162332', 0.0], ['#CC141C24', 1.0]]
+        : [['#F5FAFF', 0.0], ['#E6F1FD', 1.0]]
+    })
+    .border({ width: 1, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
+    .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+    .clickEffect(ShuYoMotion.lightClick)
     .onClick(() => {
       this.navStack.pushDestination({ name: 'CampusCardPage' });
     })
@@ -316,12 +341,13 @@ export struct HomeDashboardView {
           .padding({ top: 8, bottom: 8, left: 10, right: 10 })
           .borderRadius(10)
           .backgroundColor(this.store.colors.surfaceAlt)
+          .clickEffect(ShuYoMotion.lightClick)
           .onClick(() => {
             this.navStack.pushDestination({ name: 'AnnouncementsPage' });
           })
         }
       } else {
-        ForEach(this.store.announcements.slice(0, 3), (item: ShuYoAnnouncementItem, idx: number) => {
+        ForEach(this.previewAnnouncements, (item: ShuYoAnnouncementItem, idx: number) => {
           Row({ space: 10 }) {
             SymbolGlyph($r('sys.symbol.bell'))
               .fontSize(16)
@@ -344,6 +370,7 @@ export struct HomeDashboardView {
           .padding({ top: 8, bottom: 8, left: 10, right: 10 })
           .borderRadius(10)
           .backgroundColor(this.store.colors.surfaceAlt)
+          .clickEffect(ShuYoMotion.lightClick)
           .onClick(() => {
             this.navStack.pushDestination({ name: 'AnnouncementsPage' });
           })
@@ -352,9 +379,10 @@ export struct HomeDashboardView {
     }
     .width('100%')
     .padding(16)
-    .borderRadius(16)
-    .backgroundColor(this.store.colors.surface)
-    .border({ width: 1, color: this.store.colors.border })
+    .borderRadius(18)
+    .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+    .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
+    .shadow(ShadowStyle.OUTER_DEFAULT_XS)
   }
 
   @Builder
@@ -383,7 +411,9 @@ export struct HomeDashboardView {
             .padding(14)
             .borderRadius(14)
             .backgroundColor(this.store.colors.surfaceAlt)
+            .border({ width: 0.6, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
             .alignItems(HorizontalAlign.Start)
+            .clickEffect(ShuYoMotion.lightClick)
             .onClick(() => {
               this.navStack.pushDestination({ name: tool.routeName });
             })
@@ -394,13 +424,15 @@ export struct HomeDashboardView {
       .columnsGap(10)
       .rowsGap(10)
       .width('100%')
-      .height(272)
+      .height(312)
+      .scrollBar(BarState.Off)
     }
     .width('100%')
     .padding(16)
-    .borderRadius(16)
-    .backgroundColor(this.store.colors.surface)
-    .border({ width: 1, color: this.store.colors.border })
+    .borderRadius(18)
+    .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+    .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
+    .shadow(ShadowStyle.OUTER_DEFAULT_XS)
   }
 
   build() {
@@ -447,8 +479,9 @@ export struct HomeDashboardView {
           }
           .width(36)
           .height(36)
-          .backgroundColor(this.store.colors.surface)
-          .border({ width: 1, color: this.store.colors.border })
+          .backgroundColor(Color.Transparent)
+          .systemMaterial(ShuYoGlass.interactiveButtonMaterial(this.store.colors.isDark))
+          .clickEffect(ShuYoMotion.snappyClick)
           .onClick(() => {
             this.navStack.pushDestination({ name: 'HomeLayoutPage' });
           })
@@ -460,8 +493,9 @@ export struct HomeDashboardView {
           }
           .width(36)
           .height(36)
-          .backgroundColor(this.store.colors.surface)
-          .border({ width: 1, color: this.store.colors.border })
+          .backgroundColor(Color.Transparent)
+          .systemMaterial(ShuYoGlass.interactiveButtonMaterial(this.store.colors.isDark))
+          .clickEffect(ShuYoMotion.snappyClick)
           .onClick(() => {
             this.navStack.pushDestination({ name: 'SettingsPage' });
           })
@@ -485,34 +519,40 @@ export struct HomeDashboardView {
               .backgroundColor(this.store.colors.accent)
               .borderRadius(14)
               .padding({ left: 12, right: 12 })
+              .clickEffect(ShuYoMotion.lightClick)
               .onClick(() => {
                 this.openLogin();
               })
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .borderRadius(12)
-          .backgroundColor(this.store.colors.accentSoft)
+          .borderRadius(14)
+          .backgroundColor(this.store.colors.isDark ? '#A6102B3D' : '#CCE8F1FC')
+          .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
         }
 
-        ForEach(this.getEnabledModules(), (mod: ShuYoHomeLayoutItem, idx: number) => {
-          if (mod.id === ShuYoHomeModuleId.TODAY_COURSE) {
-            this.renderTodayCourseCard()
-          } else if (mod.id === ShuYoHomeModuleId.CAMPUS_CARD) {
-            this.renderCampusCardSummary()
-          } else if (mod.id === ShuYoHomeModuleId.ANNOUNCEMENTS) {
-            this.renderAnnouncementsCard()
-          } else if (mod.id === ShuYoHomeModuleId.CAMPUS_TOOLS) {
-            this.renderCampusToolsCard()
+        ForEach(this.enabledModules, (mod: ShuYoHomeLayoutItem, idx: number) => {
+          Column() {
+            if (mod.id === ShuYoHomeModuleId.TODAY_COURSE) {
+              this.renderTodayCourseCard()
+            } else if (mod.id === ShuYoHomeModuleId.CAMPUS_CARD) {
+              this.renderCampusCardSummary()
+            } else if (mod.id === ShuYoHomeModuleId.ANNOUNCEMENTS) {
+              this.renderAnnouncementsCard()
+            } else if (mod.id === ShuYoHomeModuleId.CAMPUS_TOOLS) {
+              this.renderCampusToolsCard()
+            }
           }
-        }, (mod: ShuYoHomeLayoutItem, idx: number): string => `${mod.id}-${idx}-${this.store.dataRevision}`)
+          .width('100%')
+          .transition(ShuYoMotion.cardEnterTransition(idx * 45))
+        }, (mod: ShuYoHomeLayoutItem): string => mod.id)
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 12, bottom: 24 })
+      .padding({ left: 16, right: 16, top: 12, bottom: 94 })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.store.colors.background)
+    .backgroundColor(Color.Transparent)
     .scrollBar(BarState.Off)
   }
 }

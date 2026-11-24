@@ -33,6 +33,13 @@ export class ChaoxingBookingService {
   private static readonly oauthRedirectHost: string = 'zhstsg-jx.5read.com';
   private static verifiedUid: string = '';
 
+  static clearSession(): void {
+    ChaoxingBookingService.verifiedUid = '';
+    ShuYoCookieJar.clearDomain('chaoxing.com');
+    ShuYoCookieJar.clearDomain('office.chaoxing.com');
+    ShuYoCookieJar.clearDomain(ChaoxingBookingService.oauthRedirectHost);
+  }
+
   private static getIndexUrl(): string {
     return `${ShuYoConstants.chaoxingBaseUrl}${ChaoxingBookingService.indexPath}?fidEnc=${encodeURIComponent(ShuYoConstants.chaoxingFidEnc)}`;
   }

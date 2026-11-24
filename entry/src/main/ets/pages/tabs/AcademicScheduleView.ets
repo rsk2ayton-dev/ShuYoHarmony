@@ -1,4 +1,5 @@
 import { ShuYoConstants } from '../../core/ShuYoConstants';
+import { ShuYoGlass, ShuYoMotion } from '../../core/ShuYoMotionGlass';
 import { ShuYoThemes } from '../../core/ShuYoTheme';
 import {
   ShuYoCourseSession,
@@ -110,31 +111,35 @@ export struct AcademicScheduleView {
     return `按当前设置，今天（${this.todayDateStr}）为第 ${raw} 周`;
   }
 
-  private getSessionsForCurrentWeek(): ShuYoCourseSession[] {
-    const list: ShuYoCourseSession[] = [];
+  @Computed
+  get weekSessionsByDay(): Map<number, ShuYoCourseSession[]> {
+    const _rev = this.store.dataRevision;
     const week = this.store.currentWeek;
+    const grouped = new Map<number, ShuYoCourseSession[]>();
     for (let i = 0; i < this.store.scheduleData.sessions.length; i++) {
       const s = this.store.scheduleData.sessions[i];
       if (s.weeks.length === 0 || s.weeks.includes(week)) {
-        list.push(s);
+        let bucket = grouped.get(s.weekday);
+        if (bucket === undefined) {
+          bucket = [];
+          grouped.set(s.weekday, bucket);
+        }
+        bucket.push(s);
       }
     }
-    return list;
+    grouped.forEach((list: ShuYoCourseSession[]) => {
+      list.sort((a: ShuYoCourseSession, b: ShuYoCourseSession): number => a.startSection - b.startSection);
+    });
+    return grouped;
   }
 
   private getSessionsForDay(weekday: number): ShuYoCourseSession[] {
-    const all = this.getSessionsForCurrentWeek();
-    const out: ShuYoCourseSession[] = [];
-    for (let i = 0; i < all.length; i++) {
-      if (all[i].weekday === weekday) {
-        out.push(all[i]);
-      }
-    }
-    out.sort((a: ShuYoCourseSession, b: ShuYoCourseSession): number => a.startSection - b.startSection);
-    return out;
+    return this.weekSessionsByDay.get(weekday) ?? [];
   }
 
-  private getUntimedForCurrentWeek(): ShuYoUntimedCourse[] {
+  @Computed
+  get untimedForCurrentWeek(): ShuYoUntimedCourse[] {
+    const _rev = this.store.dataRevision;
     const week = this.store.currentWeek;
     const out: ShuYoUntimedCourse[] = [];
     for (let i = 0; i < this.store.scheduleData.untimedCourses.length; i++) {
@@ -412,7 +417,10 @@ export struct AcademicScheduleView {
       .padding({ left: 20, right: 20, top: 8, bottom: 32 })
       .alignItems(HorizontalAlign.Start)
     }
-    .backgroundColor(this.store.colors.surface)
+    .width('100%')
+    .height('100%')
+    .align(Alignment.TopStart)
+    .backgroundColor(Color.Transparent)
   }
 
   @Builder
@@ -479,9 +487,10 @@ export struct AcademicScheduleView {
       }
     }
     .width('100%')
+    .height('100%')
     .padding({ left: 20, right: 20, top: 8, bottom: 28 })
     .alignItems(HorizontalAlign.Start)
-    .backgroundColor(this.store.colors.surface)
+    .backgroundColor(Color.Transparent)
   }
 
   @Builder
@@ -559,10 +568,11 @@ export struct AcademicScheduleView {
           .height(30)
           .fontSize(11)
           .fontColor(this.store.colors.textPrimary)
-          .backgroundColor(this.store.colors.surface)
-          .border({ width: 1, color: this.store.colors.border })
+          .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+          .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
           .borderRadius(15)
           .padding({ left: 9, right: 9 })
+          .clickEffect(ShuYoMotion.snappyClick)
           .onClick(() => {
             this.openStartWeekSheet();
           })
@@ -571,10 +581,11 @@ export struct AcademicScheduleView {
           .height(30)
           .fontSize(11)
           .fontColor(this.store.colors.textPrimary)
-          .backgroundColor(this.store.colors.surface)
-          .border({ width: 1, color: this.store.colors.border })
+          .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+          .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
           .borderRadius(15)
           .padding({ left: 9, right: 9 })
+          .clickEffect(ShuYoMotion.snappyClick)
           .onClick(() => {
             this.showDayListMode = !this.showDayListMode;
           })
@@ -586,8 +597,9 @@ export struct AcademicScheduleView {
         }
         .width(30)
         .height(30)
-        .backgroundColor(this.store.colors.surface)
-        .border({ width: 1, color: this.store.colors.border })
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(ShuYoGlass.interactiveButtonMaterial(this.store.colors.isDark))
+        .clickEffect(ShuYoMotion.snappyClick)
         .onClick(() => {
           this.navStack.pushDestination({ name: 'ScheduleSharePage' });
         })
@@ -599,8 +611,9 @@ export struct AcademicScheduleView {
         }
         .width(30)
         .height(30)
-        .backgroundColor(this.store.colors.surface)
-        .border({ width: 1, color: this.store.colors.border })
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(ShuYoGlass.interactiveButtonMaterial(this.store.colors.isDark))
+        .clickEffect(ShuYoMotion.snappyClick)
         .onClick(() => {
           this.handleSync();
         })
@@ -613,6 +626,7 @@ export struct AcademicScheduleView {
         .width(30)
         .height(30)
         .backgroundColor(this.store.colors.accent)
+        .clickEffect(ShuYoMotion.snappyClick)
         .onClick(() => {
           this.openAddCourse();
         })
@@ -622,7 +636,9 @@ export struct AcademicScheduleView {
       .bindSheet($$this.showStartWeekSheet, this.startWeekSheetBuilder(), {
         height: SheetSize.LARGE,
         dragBar: true,
-        showClose: true
+        showClose: true,
+        backgroundColor: Color.Transparent,
+        systemMaterial: ShuYoGlass.sheetMaterial()
       })
 
       // Week Selector Strip
@@ -815,7 +831,7 @@ export struct AcademicScheduleView {
         }
         .width('100%')
         .layoutWeight(1)
-        .padding({ left: 16, right: 16, bottom: 16 })
+        .padding({ left: 16, right: 16, bottom: 94 })
       } else {
         // 7-day Timetable Grid Header with actual calendar dates
         Row() {
@@ -824,7 +840,7 @@ export struct AcademicScheduleView {
             .fontSize(11)
             .textAlign(TextAlign.Center)
             .fontColor(this.store.colors.textMuted)
-          ForEach(this.weekdayNumbers, (dayNum: number, idx: number) => {
+          ForEach(this.weekdayNumbers, (dayNum: number) => {
             Column({ space: 1 }) {
               Text(ShuYoConstants.weekdayLabels[dayNum - 1])
                 .fontSize(12)
@@ -836,7 +852,7 @@ export struct AcademicScheduleView {
             }
             .layoutWeight(1)
             .alignItems(HorizontalAlign.Center)
-          }, (dayNum: number, idx: number): string => `hdr-${dayNum}-${this.store.currentWeek}-${this.store.customTermStartDate}-${this.store.dataRevision}`)
+          }, (dayNum: number): string => `hdr-${dayNum}`)
         }
         .width('100%')
         .padding({ left: 6, right: 6, top: 4, bottom: 4 })
@@ -847,7 +863,7 @@ export struct AcademicScheduleView {
             Row() {
               // Left Period Index Column
               Column() {
-                ForEach(this.sectionNumbers, (sec: number, idx: number) => {
+                ForEach(this.sectionNumbers, (sec: number) => {
                   Column({ space: 1 }) {
                     Text(String(sec))
                       .fontSize(12)
@@ -861,26 +877,26 @@ export struct AcademicScheduleView {
                   .height(this.rowHeight)
                   .justifyContent(FlexAlign.Center)
                   .alignItems(HorizontalAlign.Center)
-                }, (sec: number, idx: number): string => `sec-${sec}`)
+                }, (sec: number): string => `sec-${sec}`)
               }
               .width(34)
 
               // 7 Day Columns
-              ForEach(this.weekdayNumbers, (dayNum: number, idx: number) => {
+              ForEach(this.weekdayNumbers, (dayNum: number) => {
                 Stack({ alignContent: Alignment.TopStart }) {
                   // Background grid cells
                   Column() {
-                    ForEach(this.sectionNumbers, (sec: number, rIdx: number) => {
+                    ForEach(this.sectionNumbers, (sec: number) => {
                       Row()
                         .width('100%')
                         .height(this.rowHeight)
                         .border({ width: { bottom: 0.5, right: 0.5 }, color: this.store.colors.border })
-                    }, (sec: number, rIdx: number): string => `bg-${dayNum}-${sec}`)
+                    }, (sec: number): string => `bg-${dayNum}-${sec}`)
                   }
                   .width('100%')
 
                   // Course Blocks
-                  ForEach(this.getSessionsForDay(dayNum), (session: ShuYoCourseSession, sIdx: number) => {
+                  ForEach(this.getSessionsForDay(dayNum), (session: ShuYoCourseSession) => {
                     Column({ space: 2 }) {
                       Text(session.courseName)
                         .fontSize(10)
@@ -902,30 +918,37 @@ export struct AcademicScheduleView {
                     .margin({ left: '3%' })
                     .position({ x: 0, y: this.getCardTop(session) })
                     .padding(4)
-                    .borderRadius(7)
+                    .borderRadius(8)
                     .backgroundColor(ShuYoThemes.courseColorFor(session.courseName))
+                    .shadow(ShadowStyle.OUTER_DEFAULT_XS)
                     .alignItems(HorizontalAlign.Start)
+                    .clickEffect(ShuYoMotion.snappyClick)
+                    .transition(
+                      TransitionEffect.OPACITY
+                        .combine(TransitionEffect.scale({ x: 0.94, y: 0.94 }))
+                        .animation({ duration: 220, curve: ShuYoMotion.springCurve })
+                    )
                     .onClick(() => {
                       this.selectedSession = session;
                       this.showDetailSheet = true;
                     })
-                  }, (session: ShuYoCourseSession, sIdx: number): string => `blk-${session.id}-${sIdx}-${this.store.currentWeek}-${this.store.dataRevision}`)
+                  }, (session: ShuYoCourseSession): string => `blk-${session.id}-${session.weekday}-${session.startSection}-${this.store.currentWeek}`)
                 }
                 .layoutWeight(1)
                 .height(this.rowHeight * 12)
-              }, (dayNum: number, idx: number): string => `col-${dayNum}-${this.store.currentWeek}-${this.store.dataRevision}`)
+              }, (dayNum: number): string => `col-${dayNum}`)
             }
             .width('100%')
             .padding({ left: 6, right: 6 })
             .alignItems(VerticalAlign.Top)
 
-            if (this.getUntimedForCurrentWeek().length > 0) {
+            if (this.untimedForCurrentWeek.length > 0) {
               Column({ space: 8 }) {
                 Text('实践 / 未排定时间课程')
                   .fontSize(13)
                   .fontWeight(FontWeight.Bold)
                   .fontColor(this.store.colors.textSecondary)
-                ForEach(this.getUntimedForCurrentWeek(), (u: ShuYoUntimedCourse, idx: number) => {
+                ForEach(this.untimedForCurrentWeek, (u: ShuYoUntimedCourse, idx: number) => {
                   Column({ space: 3 }) {
                     Text(`${u.courseName} (${u.credit}学分)`)
                       .fontSize(13)
@@ -937,18 +960,19 @@ export struct AcademicScheduleView {
                   }
                   .width('100%')
                   .padding(10)
-                  .borderRadius(10)
-                  .backgroundColor(this.store.colors.surface)
-                  .border({ width: 1, color: this.store.colors.border })
+                  .borderRadius(12)
+                  .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+                  .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
                   .alignItems(HorizontalAlign.Start)
                 }, (u: ShuYoUntimedCourse, idx: number): string => `${u.id}-${idx}`)
               }
               .width('100%')
-              .padding({ left: 14, right: 14, bottom: 20 })
+              .padding({ left: 14, right: 14 })
               .alignItems(HorizontalAlign.Start)
             }
           }
           .width('100%')
+          .padding({ bottom: 94 })
         }
         .layoutWeight(1)
         .width('100%')
@@ -957,11 +981,13 @@ export struct AcademicScheduleView {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.store.colors.background)
+    .backgroundColor(Color.Transparent)
     .bindSheet($$this.showDetailSheet, this.courseDetailSheetBuilder(), {
       height: SheetSize.MEDIUM,
       dragBar: true,
-      showClose: true
+      showClose: true,
+      backgroundColor: Color.Transparent,
+      systemMaterial: ShuYoGlass.sheetMaterial()
     })
   }
 }

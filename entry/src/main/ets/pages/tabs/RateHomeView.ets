@@ -4,6 +4,7 @@ import {
   ShuYoRateRankingCategory,
   ShuYoRateUnitItem
 } from '../../models/ShuYoModels';
+import { ShuYoGlass, ShuYoMotion } from '../../core/ShuYoMotionGlass';
 import { CourseReviewService } from '../../services/CourseReviewService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoEmptyState } from '../../components/ShuYoCommonViews';
@@ -67,7 +68,9 @@ export struct RateHomeView {
     return this.store.rateHome.rankings;
   }
 
-  private getDisplayedUnits(): ShuYoRateUnitItem[] {
+  @Computed
+  get displayedUnits(): ShuYoRateUnitItem[] {
+    const _rev = this.store.dataRevision;
     if (!this.store.isDemoMode && this.hasSearched && this.searchKeyword.trim().length > 0) {
       return this.searchResults;
     }
@@ -99,7 +102,7 @@ export struct RateHomeView {
   }
 
   private getDefaultWriteTarget(): ShuYoRateUnitItem | undefined {
-    const list = this.getDisplayedUnits();
+    const list = this.displayedUnits;
     if (list.length > 0) {
       return list[0];
     }
@@ -169,8 +172,9 @@ export struct RateHomeView {
         }
         .width(34)
         .height(34)
-        .backgroundColor(this.store.colors.surface)
-        .border({ width: 1, color: this.store.colors.border })
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(ShuYoGlass.interactiveButtonMaterial(this.store.colors.isDark))
+        .clickEffect(ShuYoMotion.snappyClick)
         .onClick(() => {
           this.handleRefresh();
         })
@@ -183,6 +187,7 @@ export struct RateHomeView {
             .backgroundColor(this.store.colors.accent)
             .borderRadius(17)
             .padding({ left: 14, right: 14 })
+            .clickEffect(ShuYoMotion.snappyClick)
             .onClick(() => {
               if (this.getDefaultWriteTarget() !== undefined) {
                 this.openPublish(this.getDefaultWriteTarget()!);
@@ -242,9 +247,10 @@ export struct RateHomeView {
       .height(44)
       .padding({ left: 14, right: 10 })
       .margin({ left: 16, right: 16 })
-      .borderRadius(12)
-      .backgroundColor(this.store.colors.surface)
-      .border({ width: 1, color: this.store.colors.border })
+      .borderRadius(14)
+      .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+      .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
+      .shadow(ShadowStyle.OUTER_DEFAULT_XS)
 
       // Mode switch chips
       if (!this.hasSearched) {
@@ -256,6 +262,7 @@ export struct RateHomeView {
             .backgroundColor(this.getSegmentBg(0))
             .borderRadius(16)
             .padding({ left: 14, right: 14 })
+            .clickEffect(ShuYoMotion.lightClick)
             .onClick(() => {
               this.selectedTab = 0;
             })
@@ -266,6 +273,7 @@ export struct RateHomeView {
             .backgroundColor(this.getSegmentBg(1))
             .borderRadius(16)
             .padding({ left: 14, right: 14 })
+            .clickEffect(ShuYoMotion.lightClick)
             .onClick(() => {
               this.selectedTab = 1;
             })
@@ -284,6 +292,7 @@ export struct RateHomeView {
                   .backgroundColor(this.getRankChipBg(idx))
                   .borderRadius(14)
                   .padding({ left: 12, right: 12 })
+                  .clickEffect(ShuYoMotion.lightClick)
                   .onClick(() => {
                     this.selectedRankIndex = idx;
                   })
@@ -298,7 +307,7 @@ export struct RateHomeView {
         }
       }
 
-      if ((this.store.isSyncingRate && this.getDisplayedUnits().length === 0) || this.isSearching) {
+      if ((this.store.isSyncingRate && this.displayedUnits.length === 0) || this.isSearching) {
         Column({ space: 10 }) {
           LoadingProgress().width(34).height(34).color(this.store.colors.accent)
           Text(this.isSearching ? '正在检索全校课程评价...' : '正在加载真实课程评价...')
@@ -309,7 +318,7 @@ export struct RateHomeView {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else if (!this.store.isDemoMode &&
-        (this.searchError.length > 0 || (this.store.rateError.length > 0 && this.getDisplayedUnits().length === 0))) {
+        (this.searchError.length > 0 || (this.store.rateError.length > 0 && this.displayedUnits.length === 0))) {
         ShuYoEmptyState({
           emptyTitle: this.hasSearched ? '课程搜索失败' : '课程评价加载失败',
           emptyHint: this.hasSearched ? this.searchError : this.store.rateError,
@@ -322,7 +331,7 @@ export struct RateHomeView {
             }
           }
         })
-      } else if (this.getDisplayedUnits().length === 0) {
+      } else if (this.displayedUnits.length === 0) {
         ShuYoEmptyState({
           emptyTitle: '未找到匹配的课程评价',
           emptyHint: this.store.isDemoMode
@@ -339,7 +348,7 @@ export struct RateHomeView {
         })
       } else {
         List({ space: 10 }) {
-          ForEach(this.getDisplayedUnits(), (unit: ShuYoRateUnitItem, idx: number) => {
+          ForEach(this.displayedUnits, (unit: ShuYoRateUnitItem, idx: number) => {
             ListItem() {
               Column({ space: 8 }) {
                 Row({ space: 10 }) {
@@ -402,23 +411,26 @@ export struct RateHomeView {
               }
               .width('100%')
               .padding(14)
-              .borderRadius(14)
-              .backgroundColor(this.store.colors.surface)
-              .border({ width: 1, color: this.store.colors.border })
+              .borderRadius(16)
+              .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+              .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
+              .shadow(ShadowStyle.OUTER_DEFAULT_XS)
+              .clickEffect(ShuYoMotion.lightClick)
               .onClick(() => {
                 this.openDetail(unit);
               })
             }
-          }, (unit: ShuYoRateUnitItem, idx: number): string => `${unit.id}-${unit.reviewCount}-${idx}-${this.store.dataRevision}`)
+          }, (unit: ShuYoRateUnitItem): string => `${unit.id}-${unit.reviewCount}`)
         }
+        .cachedCount(4)
         .width('100%')
         .layoutWeight(1)
-        .padding({ left: 16, right: 16, bottom: 16 })
+        .padding({ left: 16, right: 16, bottom: 94 })
         .scrollBar(BarState.Off)
       }
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.store.colors.background)
+    .backgroundColor(Color.Transparent)
   }
 }

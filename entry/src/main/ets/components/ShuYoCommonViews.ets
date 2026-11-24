@@ -1,3 +1,4 @@
+import { ShuYoGlass, ShuYoMotion } from '../core/ShuYoMotionGlass';
 import { ShuYoAppStore } from '../store/ShuYoAppStore';
 
 @ComponentV2
@@ -21,7 +22,9 @@ export struct ShuYoTopBar {
         }
         .width(36)
         .height(36)
-        .backgroundColor(this.store.colors.surfaceAlt)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(ShuYoGlass.interactiveButtonMaterial(this.store.colors.isDark))
+        .clickEffect(ShuYoMotion.snappyClick)
         .onClick(() => {
           this.onBackTap();
         })
@@ -54,6 +57,7 @@ export struct ShuYoTopBar {
           .backgroundColor(this.store.colors.accentSoft)
           .borderRadius(16)
           .padding({ left: 12, right: 12 })
+          .clickEffect(ShuYoMotion.snappyClick)
           .onClick(() => {
             this.onRightTap();
           })
@@ -65,7 +69,9 @@ export struct ShuYoTopBar {
         }
         .width(36)
         .height(36)
-        .backgroundColor(this.store.colors.surfaceAlt)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(ShuYoGlass.interactiveButtonMaterial(this.store.colors.isDark))
+        .clickEffect(ShuYoMotion.snappyClick)
         .onClick(() => {
           this.onRightTap();
         })
@@ -73,11 +79,13 @@ export struct ShuYoTopBar {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.plus'))
             .fontSize(18)
-            .fontColor([this.store.colors.onAccent])
+            .fontColor([this.store.colors.accent])
         }
         .width(36)
         .height(36)
-        .backgroundColor(this.store.colors.accent)
+        .backgroundColor(Color.Transparent)
+        .systemMaterial(ShuYoGlass.interactiveButtonMaterial(this.store.colors.isDark))
+        .clickEffect(ShuYoMotion.snappyClick)
         .onClick(() => {
           this.onRightTap();
         })
@@ -87,7 +95,16 @@ export struct ShuYoTopBar {
     .height(54)
     .padding({ left: 16, right: 16 })
     .alignItems(VerticalAlign.Center)
-    .backgroundColor(this.store.colors.background)
+    .backgroundColor(Color.Transparent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THIN, {
+      colorMode: ShuYoGlass.blurColorMode(this.store.colors.isDark),
+      adaptiveColor: AdaptiveColor.DEFAULT,
+      scale: 0.8
+    })
+    .border({
+      width: { bottom: 0.5 },
+      color: this.store.colors.isDark ? '#1FFFFFFF' : '#240F172A'
+    })
   }
 }
 
@@ -123,6 +140,7 @@ export struct ShuYoEmptyState {
           .borderRadius(18)
           .padding({ left: 18, right: 18 })
           .margin({ top: 4 })
+          .clickEffect(ShuYoMotion.lightClick)
           .onClick(() => {
             this.onActionTap();
           })
@@ -153,6 +171,7 @@ export struct ShuYoSectionHeader {
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.store.colors.accent)
+          .clickEffect(ShuYoMotion.lightClick)
           .onClick(() => {
             this.onActionTap();
           })

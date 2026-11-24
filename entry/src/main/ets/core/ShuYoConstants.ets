@@ -14,11 +14,11 @@ export interface ShuYoWeComOAuthTarget {
 }
 
 export class ShuYoConstants {
-  static readonly appVersion: string = '0.6.0.1';
-  static readonly buildNumber: number = 27;
+  static readonly appVersion: string = '0.6.0.2';
+  static readonly buildNumber: number = 28;
   static readonly bundleName: string = 'com.rsk2ayton.shuyo.harmony';
   static readonly userAgent: string =
-    'Mozilla/5.0 (Linux; Android 14; HarmonyOS) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
+    'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
 
   static readonly jwxtBaseUrl: string = 'https://jwxt.shu.edu.cn';
   static readonly jwxtHost: string = 'jwxt.shu.edu.cn';
@@ -36,6 +36,12 @@ export class ShuYoConstants {
   static readonly webVpnPortal: string = 'https://webvpn.shu.edu.cn';
   static readonly webVpnUserInfo: string = 'https://webvpn.shu.edu.cn/api/access/user/info';
   static readonly webVpnCallback: string = 'https://webvpn.shu.edu.cn/callback/oauth2';
+  static readonly webVpnCallbackPath: string = '/callback/oauth2';
+  static readonly webVpnUserInfoPath: string = '/api/access/user/info';
+  static readonly webVpnAuthStart: string = '/api/access/auth/start';
+  static readonly webVpnAuthFinish: string = '/api/access/auth/finish';
+  static readonly webVpnNewssoProxyHost: string = 'https-newsso-shu-edu-cn-443.webvpn.shu.edu.cn';
+  static readonly webVpnExternalIdFallback: string = 'YJrvSXWl';
 
   static readonly classroomDirectHost: string = 'classroom.cc.shu.edu.cn';
   static readonly classroomDirectBase: string = 'https://classroom.cc.shu.edu.cn';

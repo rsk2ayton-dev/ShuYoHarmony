@@ -1,4 +1,5 @@
 import { ShuYoAnnouncementBlock, ShuYoAnnouncementItem } from '../../models/ShuYoModels';
+import { ShuYoGlass, ShuYoMotion } from '../../core/ShuYoMotionGlass';
 import { AnnouncementService } from '../../services/AnnouncementService';
 import { NativeSystemService } from '../../services/NativeSystemService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
@@ -343,7 +344,7 @@ export struct AnnouncementsPage {
     .width('100%')
     .height('100%')
     .padding({ left: 16, right: 16, top: 8, bottom: 24 })
-    .backgroundColor(this.store.colors.surface)
+    .backgroundColor(Color.Transparent)
   }
 
   @Builder
@@ -508,11 +509,16 @@ export struct AnnouncementsPage {
       .padding({ left: 20, right: 20, top: 8, bottom: 32 })
       .alignItems(HorizontalAlign.Start)
     }
-    .backgroundColor(this.store.colors.surface)
+    .width('100%')
+    .height('100%')
+    .align(Alignment.TopStart)
+    .backgroundColor(Color.Transparent)
     .bindSheet($$this.showImagePreview, this.imagePreviewSheetBuilder(), {
       height: SheetSize.LARGE,
       dragBar: true,
-      showClose: true
+      showClose: true,
+      backgroundColor: Color.Transparent,
+      systemMaterial: ShuYoGlass.sheetMaterial()
     })
   }
 
@@ -544,6 +550,7 @@ export struct AnnouncementsPage {
                 .backgroundColor(this.getChipBg(tabName))
                 .borderRadius(16)
                 .padding({ left: 14, right: 14 })
+                .clickEffect(ShuYoMotion.lightClick)
                 .onClick(() => {
                   this.selectSourceTab(tabName);
                 })
@@ -635,16 +642,19 @@ export struct AnnouncementsPage {
                 }
                 .width('100%')
                 .padding(14)
-                .borderRadius(14)
-                .backgroundColor(this.store.colors.surface)
-                .border({ width: 1, color: this.store.colors.border })
+                .borderRadius(16)
+                .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+                .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
+                .shadow(ShadowStyle.OUTER_DEFAULT_XS)
                 .alignItems(HorizontalAlign.Start)
+                .clickEffect(ShuYoMotion.lightClick)
                 .onClick(() => {
                   this.openDetail(item);
                 })
               }
             }, (item: ShuYoAnnouncementItem, idx: number): string => `${item.id}-${item.url}-${idx}`)
           }
+          .cachedCount(4)
           .layoutWeight(1)
           .width('100%')
           .padding({ left: 16, right: 16, bottom: 20 })
@@ -653,11 +663,16 @@ export struct AnnouncementsPage {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(this.store.colors.background)
+      .linearGradient({
+        angle: 165,
+        colors: ShuYoGlass.ambientGradientColors(this.store.colors)
+      })
       .bindSheet($$this.showDetailSheet, this.detailSheetBuilder(), {
         height: SheetSize.LARGE,
         dragBar: true,
-        showClose: true
+        showClose: true,
+        backgroundColor: Color.Transparent,
+        systemMaterial: ShuYoGlass.sheetMaterial()
       })
     }
     .hideTitleBar(true)

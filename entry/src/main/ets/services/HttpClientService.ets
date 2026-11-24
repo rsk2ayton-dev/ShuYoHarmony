@@ -119,7 +119,12 @@ export class ShuYoCookieJar {
       if (domain.length === 0) {
         domain = host;
       } else if (!ShuYoCookieJar.domainMatches(host, domain)) {
-        continue;
+        const remapped = ShuYoCookieJar.remapWebVpnCookieDomain(host, domain);
+        if (remapped.length > 0) {
+          domain = remapped;
+        } else {
+          continue;
+        }
       }
       const rawPath = rc.path !== undefined ? rc.path.trim() : '';
       const path = rawPath.startsWith('/') ? rawPath : fallbackPath;
@@ -174,8 +179,15 @@ export class ShuYoCookieJar {
           if (d.length > 0) {
             if (ShuYoCookieJar.domainMatches(host, d)) {
               domain = d;
+              domainValid = true;
             } else {
-              domainValid = false;
+              const remapped = ShuYoCookieJar.remapWebVpnCookieDomain(host, d);
+              if (remapped.length > 0) {
+                domain = remapped;
+                domainValid = true;
+              } else {
+                domainValid = false;
+              }
             }
           }
         } else if (attrLower.startsWith('path=')) {
@@ -255,6 +267,33 @@ export class ShuYoCookieJar {
   private static domainMatches(host: string, cookieDomain: string): boolean {
     const d = cookieDomain.toLowerCase();
     return host === d || host.endsWith('.' + d);
+  }
+
+  private static remapWebVpnCookieDomain(requestHost: string, cookieDomain: string): string {
+    const hostLower = requestHost.trim().toLowerCase();
+    const webVpnSuffix = '.webvpn.shu.edu.cn';
+    if (!hostLower.endsWith(webVpnSuffix)) {
+      return '';
+    }
+    let dashedProxy = hostLower.substring(0, hostLower.length - webVpnSuffix.length);
+    if (dashedProxy.startsWith('https-')) {
+      dashedProxy = dashedProxy.substring(6);
+    } else if (dashedProxy.startsWith('http-')) {
+      dashedProxy = dashedProxy.substring(5);
+    }
+    dashedProxy = dashedProxy.replace(new RegExp('-\\d+$'), '');
+    let cleanCookie = cookieDomain.trim().toLowerCase();
+    if (cleanCookie.startsWith('.')) {
+      cleanCookie = cleanCookie.substring(1);
+    }
+    if (cleanCookie.length === 0 || dashedProxy.length === 0) {
+      return '';
+    }
+    const dashedCookie = cleanCookie.replace(new RegExp('\\.', 'g'), '-');
+    if (dashedProxy === dashedCookie || dashedProxy.endsWith(`-${dashedCookie}`)) {
+      return hostLower;
+    }
+    return '';
   }
 
   private static pathMatches(requestPath: string, cookiePath: string): boolean {

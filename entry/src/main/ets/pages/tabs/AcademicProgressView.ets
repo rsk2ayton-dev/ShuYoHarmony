@@ -3,6 +3,7 @@ import {
   ShuYoProgressCourse,
   ShuYoProgressNode
 } from '../../models/ShuYoModels';
+import { ShuYoGlass, ShuYoMotion } from '../../core/ShuYoMotionGlass';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoEmptyState } from '../../components/ShuYoCommonViews';
 
@@ -52,7 +53,9 @@ export struct AcademicProgressView {
     return out;
   }
 
-  private getVisibleNodes(): ShuYoProgressNode[] {
+  @Computed
+  get visibleNodes(): ShuYoProgressNode[] {
+    const _rev = this.store.dataRevision;
     const all = this.store.progressSummary.nodes;
     if (this.statusFilter === 'all') {
       return all;
@@ -146,8 +149,9 @@ export struct AcademicProgressView {
             }
             .width(34)
             .height(34)
-            .backgroundColor(this.store.colors.surface)
-            .border({ width: 1, color: this.store.colors.border })
+            .backgroundColor(Color.Transparent)
+            .systemMaterial(ShuYoGlass.interactiveButtonMaterial(this.store.colors.isDark))
+            .clickEffect(ShuYoMotion.snappyClick)
             .onClick(() => {
               this.handleRefresh();
             })
@@ -333,9 +337,16 @@ export struct AcademicProgressView {
           }
           .width('100%')
           .padding(16)
-          .borderRadius(16)
-          .backgroundColor(this.store.colors.surface)
-          .border({ width: 1, color: this.store.colors.border })
+          .borderRadius(18)
+          .linearGradient({
+            angle: 135,
+            colors: this.store.colors.isDark
+              ? [['#D8162332', 0.0], ['#CC141C24', 1.0]]
+              : [['#F5FAFF', 0.0], ['#E6F1FD', 1.0]]
+          })
+          .border({ width: 1, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
+          .shadow(ShadowStyle.OUTER_DEFAULT_SM)
+          .transition(ShuYoMotion.cardEnterTransition(0))
 
           // Filter row
           Scroll() {
@@ -347,6 +358,8 @@ export struct AcademicProgressView {
                 .backgroundColor(this.getFilterBg('all'))
                 .borderRadius(16)
                 .padding({ left: 14, right: 14 })
+                .animation({ duration: 200, curve: ShuYoMotion.snappySpring })
+                .clickEffect(ShuYoMotion.snappyClick)
                 .onClick(() => {
                   this.statusFilter = 'all';
                 })
@@ -357,6 +370,8 @@ export struct AcademicProgressView {
                 .backgroundColor(this.getFilterBg('1'))
                 .borderRadius(16)
                 .padding({ left: 14, right: 14 })
+                .animation({ duration: 200, curve: ShuYoMotion.snappySpring })
+                .clickEffect(ShuYoMotion.snappyClick)
                 .onClick(() => {
                   this.statusFilter = '1';
                 })
@@ -367,6 +382,8 @@ export struct AcademicProgressView {
                 .backgroundColor(this.getFilterBg('4'))
                 .borderRadius(16)
                 .padding({ left: 14, right: 14 })
+                .animation({ duration: 200, curve: ShuYoMotion.snappySpring })
+                .clickEffect(ShuYoMotion.snappyClick)
                 .onClick(() => {
                   this.statusFilter = '4';
                 })
@@ -377,6 +394,8 @@ export struct AcademicProgressView {
                 .backgroundColor(this.getFilterBg('3'))
                 .borderRadius(16)
                 .padding({ left: 14, right: 14 })
+                .animation({ duration: 200, curve: ShuYoMotion.snappySpring })
+                .clickEffect(ShuYoMotion.snappyClick)
                 .onClick(() => {
                   this.statusFilter = '3';
                 })
@@ -387,6 +406,8 @@ export struct AcademicProgressView {
                 .backgroundColor(this.getFilterBg('2'))
                 .borderRadius(16)
                 .padding({ left: 14, right: 14 })
+                .animation({ duration: 200, curve: ShuYoMotion.snappySpring })
+                .clickEffect(ShuYoMotion.snappyClick)
                 .onClick(() => {
                   this.statusFilter = '2';
                 })
@@ -396,7 +417,7 @@ export struct AcademicProgressView {
           .scrollBar(BarState.Off)
           .width('100%')
 
-          if (this.getVisibleNodes().length === 0) {
+          if (this.visibleNodes.length === 0) {
             ShuYoEmptyState({
               emptyTitle: '当前筛选下暂无课程记录',
               emptyHint: '可切换上方修读状态标签查看其他课程',
@@ -406,7 +427,7 @@ export struct AcademicProgressView {
               }
             })
           } else {
-            ForEach(this.getVisibleNodes(), (node: ShuYoProgressNode, nIdx: number) => {
+            ForEach(this.visibleNodes, (node: ShuYoProgressNode, nIdx: number) => {
               Column({ space: 10 }) {
                 Row() {
                   Text(node.name)
@@ -465,25 +486,26 @@ export struct AcademicProgressView {
                     .padding(10)
                     .borderRadius(10)
                     .backgroundColor(this.store.colors.surfaceAlt)
-                  }, (course: ShuYoProgressCourse, cIdx: number): string => `${node.id}-${course.id}-${cIdx}`)
+                  }, (course: ShuYoProgressCourse): string => `${node.id}-${course.id}`)
                 }
                 .width('100%')
               }
               .width('100%')
               .padding(14)
-              .borderRadius(16)
-              .backgroundColor(this.store.colors.surface)
-              .border({ width: 1, color: this.store.colors.border })
-            }, (node: ShuYoProgressNode, nIdx: number): string => `${node.id}-${nIdx}-${this.store.dataRevision}`)
+              .borderRadius(18)
+              .backgroundColor(ShuYoGlass.cardSurfaceBg(this.store.colors))
+              .border({ width: 0.8, color: ShuYoGlass.cardGlassBorder(this.store.colors) })
+              .shadow(ShadowStyle.OUTER_DEFAULT_XS)
+            }, (node: ShuYoProgressNode): string => node.id)
           }
         }
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 14, bottom: 24 })
+      .padding({ left: 16, right: 16, top: 14, bottom: 94 })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.store.colors.background)
+    .backgroundColor(Color.Transparent)
     .scrollBar(BarState.Off)
   }
 }

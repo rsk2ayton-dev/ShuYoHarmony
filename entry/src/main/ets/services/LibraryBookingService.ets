@@ -1,4 +1,5 @@
 import { http } from '@kit.NetworkKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ShuYoConstants } from '../core/ShuYoConstants';
 import {
   ShuYoLibraryArea,
@@ -8,10 +9,11 @@ import {
 } from '../models/ShuYoModels';
 import { AuthService } from './AuthService';
 import { ChaoxingBookingService } from './ChaoxingBookingService';
-import { HttpClientService, ShuYoCookieJar } from './HttpClientService';
+import { HttpClientService, ShuYoCookieJar, ShuYoHttpResult } from './HttpClientService';
 import { JsonHelpers } from './JsonHelpers';
 import { LibraryFloorPlanLayout } from './LibraryFloorPlanLayout';
 import { RawFileService } from './RawFileService';
+import { ShuYoWebVpnFailure, WebVpnAuthService } from './WebVpnAuthService';
 
 interface ShuYoVenueMeta {
   roomType: string;
@@ -25,6 +27,22 @@ export interface ShuYoLibrarySlotQueryResult {
   activeArea: ShuYoLibraryArea | undefined;
   isLive: boolean;
   statusText: string;
+  failure?: ShuYoThereFailure;
+}
+
+/** Failure taxonomy mirrored from the Flutter client's ThereFailureKind. */
+export enum ShuYoThereFailure {
+  NONE = 'none',
+  LOGIN_REQUIRED = 'loginRequired',
+  WEBVPN_EXPIRED = 'webVpnLoginRequired',
+  UNREACHABLE = 'unreachable',
+  UNCERTAIN = 'uncertain'
+}
+
+interface ShuYoThereSession {
+  sessionId: string;
+  failure: ShuYoThereFailure;
+  message: string;
 }
 
 export interface ShuYoLibraryBookResult {
@@ -60,6 +78,14 @@ export class LibraryBookingService {
   private static readonly venueMetaMap: Map<string, ShuYoVenueMeta> = LibraryBookingService.buildVenueMetaMap();
   private static thereSessionIds: Map<string, string> = new Map<string, string>();
   private static liveRawRooms: Map<string, Record<string, Object>> = new Map<string, Record<string, Object>>();
+
+  static clearSession(): void {
+    LibraryBookingService.thereSessionIds.clear();
+    LibraryBookingService.liveRawRooms.clear();
+    ShuYoCookieJar.clearDomain(ShuYoConstants.thereHost);
+    ShuYoCookieJar.clearDomain('https-there-shu-edu-cn-443.webvpn.shu.edu.cn');
+    ShuYoCookieJar.clearDomain('http-there-shu-edu-cn-80.webvpn.shu.edu.cn');
+  }
 
   private static buildVenueMetaMap(): Map<string, ShuYoVenueMeta> {
     const m = new Map<string, ShuYoVenueMeta>();
@@ -291,142 +317,489 @@ export class LibraryBookingService {
   }
 
   private static extractSessionIdFromHtml(html: string): string | undefined {
-    const m1 = new RegExp('\\bsessionId\\s*[=:]\\s*"([^"\\r\\n]*)"').exec(html);
-    if (m1 !== null) {
-      return m1[1];
+    const m1 = new RegExp('\\bsessionId\\s*[=:]\\s*("(?:\\\\.|[^"\\\\])*"|\'(?:\\\\.|[^\'\\\\])*\')').exec(html) ??
+      new RegExp('["\']sessionId["\']\\s*:\\s*("(?:\\\\.|[^"\\\\])*"|\'(?:\\\\.|[^\'\\\\])*\')').exec(html);
+    if (m1 === null || m1[1] === undefined) {
+      return undefined;
     }
-    const m2 = new RegExp("\\bsessionId\\s*[=:]\\s*'([^'\\r\\n]*)'").exec(html);
-    if (m2 !== null) {
-      return m2[1];
+    const literal = m1[1];
+    let session = '';
+    if (literal.startsWith('"')) {
+      try {
+        session = JSON.parse(literal) as string;
+      } catch (_err) {
+        return undefined;
+      }
+    } else if (literal.length >= 2) {
+      session = literal.substring(1, literal.length - 1);
+    } else {
+      return undefined;
     }
-    return undefined;
+    if (session.includes('\n') || session.includes('\r') || (session.length > 0 && session.trim().length === 0)) {
+      return undefined;
+    }
+    return session;
   }
 
-  private static async completeThereSsoOAuth(baseUrl: string): Promise<boolean> {
+  private static async completeThereSsoOAuth(
+    baseUrl: string,
+    useWebVpn: boolean
+  ): Promise<ShuYoThereSession> {
+    const unreachableFail: ShuYoThereSession = {
+      sessionId: '',
+      failure: ShuYoThereFailure.UNREACHABLE,
+      message: '暂时无法连接预约系统 · 校外请开启 WebVPN 或连接校园网'
+    };
+    const webVpnExpired: ShuYoThereSession = {
+      sessionId: '',
+      failure: ShuYoThereFailure.WEBVPN_EXPIRED,
+      message: 'WebVPN 会话已失效 · 请关闭 WebVPN 直连校园网，或重新登录 WebVPN'
+    };
     if (!ShuYoCookieJar.hasCookie(ShuYoConstants.ssoBaseUrl, 'SHU_OAUTH2')) {
-      return false;
-    }
-    const loginResp = await HttpClientService.request(
-      http.RequestMethod.GET,
-      `${baseUrl}/login?from=web`,
-      { 'Accept': 'application/json,text/html,*/*' },
-      undefined,
-      10000
-    );
-    if (loginResp.statusCode < 300 || loginResp.statusCode >= 400 || loginResp.location.length === 0) {
-      return false;
-    }
-    const state = AuthService.extractQueryParam(loginResp.location, 'state').trim();
-    if (state.length === 0) {
-      return false;
-    }
-    const authUrl =
-      `${ShuYoConstants.ssoBaseUrl}/oauth/authorize?response_type=code` +
-      `&client_id=${encodeURIComponent(ShuYoConstants.targetThere.clientId)}` +
-      `&redirect_uri=${encodeURIComponent(ShuYoConstants.targetThere.redirectUri)}` +
-      `&scope=${encodeURIComponent(ShuYoConstants.targetThere.scope)}` +
-      `&state=${encodeURIComponent(state)}`;
-
-    const ssoResp = await HttpClientService.request(
-      http.RequestMethod.GET,
-      authUrl,
-      { 'Accept': 'text/html,application/xhtml+xml,*/*' },
-      undefined,
-      10000
-    );
-    if (ssoResp.statusCode < 300 || ssoResp.statusCode >= 400 || ssoResp.location.length === 0) {
-      return false;
-    }
-    const callbackUrl = LibraryBookingService.normalizeThereRedirect(baseUrl, ssoResp.location);
-    if (!callbackUrl.includes('/login-oauth2') || AuthService.extractQueryParam(callbackUrl, 'code').length === 0) {
-      return false;
+      return {
+        sessionId: '',
+        failure: ShuYoThereFailure.LOGIN_REQUIRED,
+        message: '图书馆预约需要登录统一身份认证 · 请先在首页完成登录'
+      };
     }
 
-    const cbResp = await HttpClientService.request(
-      http.RequestMethod.GET,
-      callbackUrl,
-      { 'Accept': 'text/html,application/xhtml+xml,*/*' },
-      undefined,
-      10000
-    );
-    if (cbResp.statusCode < 300 || cbResp.statusCode >= 400 || cbResp.location.length === 0) {
-      return false;
-    }
-
-    let nextUrl = LibraryBookingService.normalizeThereRedirect(baseUrl, cbResp.location);
-    for (let hop = 0; hop < 4; hop++) {
-      const pageResp = await HttpClientService.request(
+    try {
+      const loginUrl = `${baseUrl}/login?from=web`;
+      const loginResp = await HttpClientService.request(
         http.RequestMethod.GET,
-        nextUrl,
+        loginUrl,
+        LibraryBookingService.withGatewayCookie(loginUrl, { 'Accept': 'application/json,text/html,*/*' }),
+        undefined,
+        12000
+      );
+      const loginLoc = LibraryBookingService.resolveThereLocation(loginUrl, loginResp.location);
+      LibraryBookingService.logThere(
+        'oauth/login',
+        `status=${loginResp.statusCode} hasLoc=${loginLoc.length > 0}`
+      );
+      if (useWebVpn && LibraryBookingService.isWebVpnPortalRedirect(loginLoc)) {
+        return webVpnExpired;
+      }
+      if (loginResp.statusCode < 300 || loginResp.statusCode >= 400 || loginLoc.length === 0) {
+        return {
+          sessionId: '',
+          failure: loginResp.statusCode === 0 ? ShuYoThereFailure.UNREACHABLE : ShuYoThereFailure.UNCERTAIN,
+          message: loginResp.statusCode === 0
+            ? unreachableFail.message
+            : '图书馆预约暂时无法启动登录，请稍后重试'
+        };
+      }
+      const state = AuthService.extractQueryParam(loginLoc, 'state').trim();
+      if (state.length === 0) {
+        return {
+          sessionId: '',
+          failure: ShuYoThereFailure.UNCERTAIN,
+          message: '图书馆预约未返回授权参数 · 请稍后重试'
+        };
+      }
+
+      const authUrl =
+        `${ShuYoConstants.ssoBaseUrl}/oauth/authorize?response_type=code` +
+        `&client_id=${encodeURIComponent(ShuYoConstants.targetThere.clientId)}` +
+        `&redirect_uri=${encodeURIComponent(ShuYoConstants.targetThere.redirectUri)}` +
+        `&scope=${encodeURIComponent(ShuYoConstants.targetThere.scope)}` +
+        `&state=${encodeURIComponent(state)}`;
+      const ssoResp = await HttpClientService.request(
+        http.RequestMethod.GET,
+        authUrl,
         { 'Accept': 'text/html,application/xhtml+xml,*/*' },
         undefined,
-        10000
+        12000
       );
-      if (pageResp.statusCode === 200) {
-        return true;
+      const ssoLoc = LibraryBookingService.resolveThereLocation(authUrl, ssoResp.location);
+      LibraryBookingService.logThere(
+        'oauth/sso',
+        `status=${ssoResp.statusCode} hasLoc=${ssoLoc.length > 0}`
+      );
+      if (ssoLoc.includes('/oauth2/login/')) {
+        return {
+          sessionId: '',
+          failure: ShuYoThereFailure.LOGIN_REQUIRED,
+          message: '统一身份认证已失效 · 请在「设置」退出后重新登录校园账号'
+        };
       }
-      if (pageResp.statusCode >= 300 && pageResp.statusCode < 400 && pageResp.location.length > 0) {
-        nextUrl = LibraryBookingService.normalizeThereRedirect(baseUrl, pageResp.location);
-      } else {
-        break;
+      if (ssoResp.statusCode < 300 || ssoResp.statusCode >= 400 || ssoLoc.length === 0) {
+        return {
+          sessionId: '',
+          failure: ssoResp.statusCode === 0 ? ShuYoThereFailure.UNREACHABLE : ShuYoThereFailure.UNCERTAIN,
+          message: '统一身份认证未返回预约授权回调 · 请稍后重试'
+        };
       }
+      const callbackUrl = LibraryBookingService.normalizeThereRedirect(baseUrl, ssoLoc);
+      const returnedState = AuthService.extractQueryParam(callbackUrl, 'state');
+      if (HttpClientService.extractPath(callbackUrl) !== '/login-oauth2' ||
+        AuthService.extractQueryParam(callbackUrl, 'code').length === 0 ||
+        returnedState !== state) {
+        return {
+          sessionId: '',
+          failure: ShuYoThereFailure.UNCERTAIN,
+          message: '图书馆预约授权回调无效或状态不匹配 · 请重试'
+        };
+      }
+
+      const cbResp = await HttpClientService.request(
+        http.RequestMethod.GET,
+        callbackUrl,
+        LibraryBookingService.withGatewayCookie(callbackUrl, { 'Accept': 'text/html,application/xhtml+xml,*/*' }),
+        undefined,
+        12000
+      );
+      const cbLoc = LibraryBookingService.resolveThereLocation(callbackUrl, cbResp.location);
+      LibraryBookingService.logThere(
+        'oauth/callback',
+        `status=${cbResp.statusCode} hasLoc=${cbLoc.length > 0}`
+      );
+      if (useWebVpn && LibraryBookingService.isWebVpnPortalRedirect(cbLoc)) {
+        return webVpnExpired;
+      }
+      if (cbResp.statusCode < 300 || cbResp.statusCode >= 400 || cbLoc.length === 0) {
+        return {
+          sessionId: '',
+          failure: ShuYoThereFailure.UNCERTAIN,
+          message: '图书馆预约未能建立业务会话 · 请重试'
+        };
+      }
+
+      let nextUrl = LibraryBookingService.normalizeThereRedirect(baseUrl, cbLoc);
+      if (HttpClientService.extractPath(nextUrl) !== '/web') {
+        return {
+          sessionId: '',
+          failure: ShuYoThereFailure.UNCERTAIN,
+          message: '图书馆预约授权跳转路径异常 · 请重试'
+        };
+      }
+
+      for (let hop = 0; hop < 4; hop++) {
+        const pageResp = await HttpClientService.request(
+          http.RequestMethod.GET,
+          nextUrl,
+          LibraryBookingService.withGatewayCookie(nextUrl, { 'Accept': 'text/html,application/xhtml+xml,*/*' }),
+          undefined,
+          12000
+        );
+        const hopLoc = LibraryBookingService.resolveThereLocation(nextUrl, pageResp.location);
+        LibraryBookingService.logThere(
+          'oauth/web',
+          `hop=${hop} status=${pageResp.statusCode} hasLoc=${hopLoc.length > 0}`
+        );
+        if (useWebVpn && LibraryBookingService.isWebVpnPortalRedirect(hopLoc)) {
+          return webVpnExpired;
+        }
+        if (pageResp.statusCode === 200) {
+          return { sessionId: '', failure: ShuYoThereFailure.NONE, message: '' };
+        }
+        if (pageResp.statusCode >= 300 && pageResp.statusCode < 400 && hopLoc.length > 0) {
+          const normalizedHop = LibraryBookingService.normalizeThereRedirect(baseUrl, hopLoc);
+          const hopPath = HttpClientService.extractPath(normalizedHop);
+          if (hopPath.startsWith('/login')) {
+            return {
+              sessionId: '',
+              failure: ShuYoThereFailure.UNCERTAIN,
+              message: '图书馆预约会话兑换失败 · 请重试'
+            };
+          }
+          nextUrl = normalizedHop;
+        } else {
+          break;
+        }
+      }
+      return {
+        sessionId: '',
+        failure: ShuYoThereFailure.UNCERTAIN,
+        message: '图书馆预约登录跳转次数过多 · 请稍后重试'
+      };
+    } catch (_err) {
+      return unreachableFail;
     }
-    return false;
   }
 
-  private static async ensureThereSession(venueId: string, useWebVpn: boolean): Promise<string | undefined> {
+  private static logThere(stage: string, detail: string): void {
+    hilog.info(0x5348, 'ShuYoThere', '%{public}s | %{public}s', stage, detail);
+  }
+
+  private static resolveThereLocation(baseUrl: string, rawLocation: string): string {
+    if (rawLocation.length === 0) {
+      return '';
+    }
+    return HttpClientService.resolveUrl(baseUrl, rawLocation);
+  }
+
+  /**
+   * The mobile entry is a WeCom H5 page. Sending its WebView marker from a plain
+   * app request can route the server into a WeChat OAuth branch, so the entry is
+   * probed once with the marker and once without it.
+   */
+  private static isWeChatRedirect(statusCode: number, location: string): boolean {
+    if (statusCode < 300 || statusCode >= 400 || location.length === 0) {
+      return false;
+    }
+    const host = HttpClientService.extractHost(location).toLowerCase();
+    return host === 'open.weixin.qq.com' ||
+      host === 'weixin.qq.com' ||
+      host === 'https-open-weixin-qq-com-443.webvpn.shu.edu.cn';
+  }
+
+  private static isWebVpnPortalRedirect(location: string): boolean {
+    if (location.length === 0) {
+      return false;
+    }
+    const host = HttpClientService.extractHost(location).toLowerCase();
+    return host === 'webvpn.shu.edu.cn' || host === 'www.webvpn.shu.edu.cn';
+  }
+
+  private static isThereLoginRedirect(baseUrl: string, statusCode: number, location: string): boolean {
+    if (statusCode === 401) {
+      return true;
+    }
+    if (statusCode < 300 || statusCode >= 400 || location.length === 0) {
+      return false;
+    }
+    const host = HttpClientService.extractHost(location).toLowerCase();
+    const baseHost = HttpClientService.extractHost(baseUrl).toLowerCase();
+    const path = HttpClientService.extractPath(location);
+    if (host === baseHost && (path === '/login' || path === '/login-oauth2')) {
+      return true;
+    }
+    return host.endsWith('.shu.edu.cn') &&
+      (path.startsWith('/oauth/') || path.startsWith('/oauth2/') || path === '/login');
+  }
+
+  /**
+   * The WebVPN gateway authenticates with the portal's `webvpn-token` cookie, which
+   * is scoped to webvpn.shu.edu.cn and therefore never sent to the proxied host.
+   */
+  private static withGatewayCookie(requestUrl: string, headers: Record<string, string>): Record<string, string> {
+    const host = HttpClientService.extractHost(requestUrl).toLowerCase();
+    if (!host.endsWith('.webvpn.shu.edu.cn')) {
+      return headers;
+    }
+    if (ShuYoCookieJar.getCookieValue(requestUrl, 'webvpn-token').length > 0) {
+      return headers;
+    }
+    const portalToken = ShuYoCookieJar.getCookieValue(ShuYoConstants.webVpnPortal, 'webvpn-token');
+    if (portalToken.length === 0) {
+      return headers;
+    }
+    const jarCookie = ShuYoCookieJar.headerFor(requestUrl);
+    headers['Cookie'] = jarCookie.length > 0
+      ? `webvpn-token=${portalToken}; ${jarCookie}`
+      : `webvpn-token=${portalToken}`;
+    return headers;
+  }
+
+  private static async probeThereEntry(
+    venueId: string,
+    useWebVpn: boolean,
+    withWeComHeader: boolean
+  ): Promise<ShuYoHttpResult> {
+    const meta = LibraryBookingService.venueMetaMap.get(venueId);
+    const baseUrl = LibraryBookingService.thereBase(useWebVpn);
+    const entryUrl = meta !== undefined ? `${baseUrl}${meta.mobilePath}` : baseUrl;
+    const headers: Record<string, string> = {
+      'Accept': 'application/json,text/html,*/*'
+    };
+    if (withWeComHeader) {
+      headers['X-Requested-With'] = 'com.tencent.wework';
+    }
+    return HttpClientService.request(
+      http.RequestMethod.GET,
+      entryUrl,
+      LibraryBookingService.withGatewayCookie(entryUrl, headers),
+      undefined,
+      12000
+    );
+  }
+
+  private static async verifyThereProfile(
+    venueId: string,
+    sessionId: string,
+    useWebVpn: boolean
+  ): Promise<ShuYoThereFailure> {
+    const profileJson = await LibraryBookingService.thereApiGet(
+      venueId,
+      sessionId,
+      useWebVpn,
+      '/api/v3/my/profile'
+    );
+    if (profileJson === undefined) {
+      return ShuYoThereFailure.UNCERTAIN;
+    }
+    const profileData = JsonHelpers.asObject(profileJson['data']);
+    if (profileData === undefined || JsonHelpers.str(profileData, 'id', '').trim().length === 0) {
+      return ShuYoThereFailure.LOGIN_REQUIRED;
+    }
+    if (JsonHelpers.bool(profileData, 'isAnonymous', false)) {
+      return ShuYoThereFailure.LOGIN_REQUIRED;
+    }
+    return ShuYoThereFailure.NONE;
+  }
+
+  private static async ensureThereSession(venueId: string, useWebVpn: boolean): Promise<ShuYoThereSession> {
     const meta = LibraryBookingService.venueMetaMap.get(venueId);
     if (meta === undefined || !meta.isThere) {
-      return undefined;
+      return { sessionId: '', failure: ShuYoThereFailure.UNCERTAIN, message: '该场馆暂不支持实时空位查询' };
     }
     const cacheKey = `${venueId}|${useWebVpn ? 'vpn' : 'dir'}`;
     const existing = LibraryBookingService.thereSessionIds.get(cacheKey);
     if (existing !== undefined) {
-      return existing;
+      return { sessionId: existing, failure: ShuYoThereFailure.NONE, message: '' };
     }
 
     const baseUrl = LibraryBookingService.thereBase(useWebVpn);
     const entryUrl = `${baseUrl}${meta.mobilePath}`;
-    let resp = await HttpClientService.request(
-      http.RequestMethod.GET,
-      entryUrl,
-      {
-        'Accept': 'application/json,text/html,*/*',
-        'X-Requested-With': 'com.tencent.wework'
-      },
-      undefined,
-      10000
-    );
+    const webVpnExpired: ShuYoThereSession = {
+      sessionId: '',
+      failure: ShuYoThereFailure.WEBVPN_EXPIRED,
+      message: 'WebVPN 会话已失效 · 请关闭 WebVPN 直连校园网，或重新登录 WebVPN'
+    };
 
-    const needsLogin = (resp.statusCode >= 300 && resp.statusCode < 400) ||
-      resp.body.includes('"isAnonymous":true') ||
-      resp.body.includes("'isAnonymous':true");
-    if (needsLogin) {
-      const authed = await LibraryBookingService.completeThereSsoOAuth(baseUrl);
-      if (!authed) {
-        return undefined;
+    if (useWebVpn) {
+      const vpn = await WebVpnAuthService.ensureSession();
+      if (vpn.failure !== ShuYoWebVpnFailure.NONE) {
+        LibraryBookingService.logThere(
+          'webvpn/failed',
+          `room=${meta.roomType} kind=${vpn.failure}`
+        );
+        if (vpn.failure === ShuYoWebVpnFailure.LOGIN_REQUIRED) {
+          return {
+            sessionId: '',
+            failure: ShuYoThereFailure.WEBVPN_EXPIRED,
+            message: `${vpn.message} · 也可关闭 WebVPN 用校园网直连`
+          };
+        }
+        return {
+          sessionId: '',
+          failure: vpn.failure === ShuYoWebVpnFailure.UNREACHABLE
+            ? ShuYoThereFailure.UNREACHABLE
+            : ShuYoThereFailure.UNCERTAIN,
+          message: `${vpn.message} · 也可关闭 WebVPN 用校园网直连`
+        };
       }
-      resp = await HttpClientService.request(
-        http.RequestMethod.GET,
-        entryUrl,
-        {
-          'Accept': 'application/json,text/html,*/*',
-          'X-Requested-With': 'com.tencent.wework'
-        },
-        undefined,
-        10000
+    }
+
+    let resp: ShuYoHttpResult;
+    try {
+      resp = await LibraryBookingService.probeThereEntry(venueId, useWebVpn, true);
+    } catch (_err) {
+      LibraryBookingService.logThere('entry/unreachable', `room=${meta.roomType} transport=${useWebVpn ? 'webvpn' : 'direct'}`);
+      return {
+        sessionId: '',
+        failure: ShuYoThereFailure.UNREACHABLE,
+        message: '暂时无法连接预约系统 · 校外请点「开 WebVPN」或连接校园网'
+      };
+    }
+    let location = LibraryBookingService.resolveThereLocation(entryUrl, resp.location);
+    if (LibraryBookingService.isWeChatRedirect(resp.statusCode, location)) {
+      LibraryBookingService.logThere(
+        'entry/wecom-retry',
+        `room=${meta.roomType} status=${resp.statusCode}`
       );
+      try {
+        resp = await LibraryBookingService.probeThereEntry(venueId, useWebVpn, false);
+      } catch (_err) {
+        return {
+          sessionId: '',
+          failure: ShuYoThereFailure.UNREACHABLE,
+          message: '暂时无法连接预约系统 · 校外请点「开 WebVPN」或连接校园网'
+        };
+      }
+      location = LibraryBookingService.resolveThereLocation(entryUrl, resp.location);
+    }
+    if (useWebVpn && LibraryBookingService.isWebVpnPortalRedirect(location)) {
+      return webVpnExpired;
+    }
+
+    const initialWeChatRedirect = LibraryBookingService.isWeChatRedirect(resp.statusCode, location);
+    const anonymous = resp.body.includes('"isAnonymous":true') || resp.body.includes("'isAnonymous':true");
+    if (initialWeChatRedirect || anonymous || LibraryBookingService.isThereLoginRedirect(baseUrl, resp.statusCode, location)) {
+      if (initialWeChatRedirect) {
+        LibraryBookingService.logThere('entry/wechat-pre-oauth', `room=${meta.roomType}`);
+      }
+      const oauthRes = await LibraryBookingService.completeThereSsoOAuth(baseUrl, useWebVpn);
+      if (oauthRes.failure !== ShuYoThereFailure.NONE) {
+        return oauthRes;
+      }
+      try {
+        resp = await LibraryBookingService.probeThereEntry(venueId, useWebVpn, true);
+        location = LibraryBookingService.resolveThereLocation(entryUrl, resp.location);
+        if (LibraryBookingService.isWeChatRedirect(resp.statusCode, location)) {
+          resp = await LibraryBookingService.probeThereEntry(venueId, useWebVpn, false);
+          location = LibraryBookingService.resolveThereLocation(entryUrl, resp.location);
+        }
+      } catch (_err) {
+        return {
+          sessionId: '',
+          failure: ShuYoThereFailure.UNREACHABLE,
+          message: '暂时无法连接预约系统 · 校外请点「开 WebVPN」或连接校园网'
+        };
+      }
+      if (useWebVpn && LibraryBookingService.isWebVpnPortalRedirect(location)) {
+        return webVpnExpired;
+      }
+      if (LibraryBookingService.isWeChatRedirect(resp.statusCode, location)) {
+        LibraryBookingService.logThere('entry/wechat-after-oauth', `room=${meta.roomType} status=${resp.statusCode}`);
+        return {
+          sessionId: '',
+          failure: ShuYoThereFailure.UNCERTAIN,
+          message: '预约入口仍跳转至微信授权，当前客户端暂时无法完成该认证'
+        };
+      }
     }
 
     if (resp.statusCode !== 200) {
-      return undefined;
+      LibraryBookingService.logThere(
+        'entry/failed',
+        `room=${meta.roomType} status=${resp.statusCode} transport=${useWebVpn ? 'webvpn' : 'direct'}`
+      );
+      return {
+        sessionId: '',
+        failure: resp.statusCode === 0 ? ShuYoThereFailure.UNREACHABLE : ShuYoThereFailure.UNCERTAIN,
+        message: resp.statusCode === 0
+          ? '暂时无法连接预约系统 · 请连接校园网或开启 WebVPN 后重试'
+          : `预约入口返回 HTTP ${resp.statusCode} · 请检查校园网或 WebVPN 后重试`
+      };
     }
-    const sid = LibraryBookingService.extractSessionIdFromHtml(resp.body);
-    if (sid === undefined) {
-      return undefined;
+    if (resp.body.includes('"isAnonymous":true') || resp.body.includes("'isAnonymous':true")) {
+      return {
+        sessionId: '',
+        failure: ShuYoThereFailure.LOGIN_REQUIRED,
+        message: '图书馆预约需要登录校园账号'
+      };
     }
-    LibraryBookingService.thereSessionIds.set(cacheKey, sid);
-    return sid;
+    const sessionId = LibraryBookingService.extractSessionIdFromHtml(resp.body);
+    if (sessionId === undefined) {
+      return {
+        sessionId: '',
+        failure: ShuYoThereFailure.UNCERTAIN,
+        message: '预约页面未返回可识别的会话 · 请稍后重试'
+      };
+    }
+    const verified = await LibraryBookingService.verifyThereProfile(venueId, sessionId, useWebVpn);
+    if (verified !== ShuYoThereFailure.NONE) {
+      LibraryBookingService.logThere(
+        'entry/profile',
+        `room=${meta.roomType} result=${verified}`
+      );
+      return {
+        sessionId: '',
+        failure: verified,
+        message: verified === ShuYoThereFailure.LOGIN_REQUIRED
+          ? '预约系统未确认登录状态 · 请重新登录校园账号'
+          : '预约系统暂时无法确认会话 · 请稍后重试'
+      };
+    }
+    LibraryBookingService.thereSessionIds.set(cacheKey, sessionId);
+    LibraryBookingService.logThere(
+      'entry/ok',
+      `room=${meta.roomType} transport=${useWebVpn ? 'webvpn' : 'direct'} ` +
+        `mode=${sessionId.length > 0 ? 'header' : 'cookie'}`
+    );
+    return { sessionId: sessionId, failure: ShuYoThereFailure.NONE, message: '' };
   }
 
   private static buildThereHeaders(
@@ -462,22 +835,37 @@ export class LibraryBookingService {
     pathWithQuery: string
   ): Promise<Record<string, Object> | undefined> {
     const baseUrl = LibraryBookingService.thereBase(useWebVpn);
+    const requestUrl = `${baseUrl}${pathWithQuery}`;
+    const headers = LibraryBookingService.withGatewayCookie(
+      requestUrl,
+      LibraryBookingService.buildThereHeaders(venueId, sessionId, useWebVpn, http.RequestMethod.GET)
+    );
     const resp = await HttpClientService.request(
       http.RequestMethod.GET,
-      `${baseUrl}${pathWithQuery}`,
-      LibraryBookingService.buildThereHeaders(venueId, sessionId, useWebVpn, http.RequestMethod.GET),
+      requestUrl,
+      headers,
       undefined,
-      10000
+      12000
     );
+    const route = pathWithQuery.split('?')[0];
     if (resp.statusCode === 401 || resp.statusCode === 403 || resp.statusCode === 302) {
       LibraryBookingService.thereSessionIds.delete(`${venueId}|${useWebVpn ? 'vpn' : 'dir'}`);
+      LibraryBookingService.logThere('api/session-lost', `route=${route} status=${resp.statusCode}`);
       return undefined;
     }
     if (resp.statusCode !== 200) {
+      LibraryBookingService.logThere('api/failed', `route=${route} status=${resp.statusCode}`);
       return undefined;
     }
     const obj = JsonHelpers.parseObject(resp.body);
-    if (obj === undefined || JsonHelpers.num(obj, 'code', -1) !== 0) {
+    if (obj === undefined) {
+      LibraryBookingService.logThere('api/unparsable', `route=${route} chars=${resp.body.length}`);
+      return undefined;
+    }
+    const code = JsonHelpers.num(obj, 'code', -1);
+    if (code !== 0) {
+      const message = JsonHelpers.str(obj, 'warnMessage', JsonHelpers.str(obj, 'message', ''));
+      LibraryBookingService.logThere('api/rejected', `route=${route} code=${code} msg=${message.length}`);
       return undefined;
     }
     return obj;
@@ -617,12 +1005,13 @@ export class LibraryBookingService {
     const meta = LibraryBookingService.venueMetaMap.get(venue.id);
     const defaultStatus = isDemoMode
       ? '演示模式 · 按所选时段模拟'
-      : '离线视图 · 按时段模拟（连接校园网查实时）';
+      : '未登录统一身份认证 · 显示模拟空位（登录后查询实时）';
     const fallbackResult: ShuYoLibrarySlotQueryResult = {
       areas: fallbackAreas,
       activeArea: fallbackActive,
       isLive: false,
-      statusText: defaultStatus
+      statusText: defaultStatus,
+      failure: isDemoMode ? ShuYoThereFailure.NONE : ShuYoThereFailure.LOGIN_REQUIRED
     };
 
     if (isDemoMode || meta === undefined) {
@@ -659,9 +1048,21 @@ export class LibraryBookingService {
           };
         }
       } catch (_err) {
-        return fallbackResult;
+        return {
+          areas: fallbackAreas,
+          activeArea: fallbackActive,
+          isLive: false,
+          statusText: `${venue.name}超星系统查询异常 · 点击「刷新空位」重试`,
+          failure: ShuYoThereFailure.UNCERTAIN
+        };
       }
-      return fallbackResult;
+      return {
+        areas: fallbackAreas,
+        activeArea: fallbackActive,
+        isLive: false,
+        statusText: `${venue.name}超星系统未返回座位数据 · 请确认已登录校园账号`,
+        failure: ShuYoThereFailure.LOGIN_REQUIRED
+      };
     }
 
     if (!meta.isThere) {
@@ -669,10 +1070,17 @@ export class LibraryBookingService {
     }
 
     try {
-      const sessionId = await LibraryBookingService.ensureThereSession(venue.id, useWebVpn);
-      if (sessionId === undefined) {
-        return fallbackResult;
+      const session = await LibraryBookingService.ensureThereSession(venue.id, useWebVpn);
+      if (session.failure !== ShuYoThereFailure.NONE) {
+        return {
+          areas: fallbackAreas,
+          activeArea: fallbackActive,
+          isLive: false,
+          statusText: session.message,
+          failure: session.failure
+        };
       }
+      const sessionId = session.sessionId;
       const areasJson = await LibraryBookingService.thereApiGet(
         venue.id,
         sessionId,
@@ -680,11 +1088,23 @@ export class LibraryBookingService {
         `/api/v3/booking-status/areas?begin=${encodeURIComponent(day)}&end=${encodeURIComponent(day)}`
       );
       if (areasJson === undefined) {
-        return fallbackResult;
+        return {
+          areas: fallbackAreas,
+          activeArea: fallbackActive,
+          isLive: false,
+          statusText: '实时空位查询失败 · 点击「刷新空位」重试',
+          failure: ShuYoThereFailure.UNCERTAIN
+        };
       }
       const rawAreaList = JsonHelpers.asArray(areasJson['data']);
       if (rawAreaList.length === 0) {
-        return fallbackResult;
+        return {
+          areas: fallbackAreas,
+          activeArea: fallbackActive,
+          isLive: false,
+          statusText: `${venue.name}该时段暂无可预约分区`,
+          failure: ShuYoThereFailure.NONE
+        };
       }
 
       const liveAreas: ShuYoLibraryArea[] = [];
@@ -710,7 +1130,13 @@ export class LibraryBookingService {
       }
 
       if (liveAreas.length === 0) {
-        return fallbackResult;
+        return {
+          areas: fallbackAreas,
+          activeArea: fallbackActive,
+          isLive: false,
+          statusText: `${venue.name}实时分区数据为空 · 点击「刷新空位」重试`,
+          failure: ShuYoThereFailure.UNCERTAIN
+        };
       }
 
       if (isOverview) {
@@ -737,7 +1163,13 @@ export class LibraryBookingService {
           }
         }
         if (validZones.length === 0) {
-          return fallbackResult;
+          return {
+            areas: fallbackAreas,
+            activeArea: fallbackActive,
+            isLive: false,
+            statusText: '实时座位数据为空 · 点击「刷新空位」重试',
+            failure: ShuYoThereFailure.UNCERTAIN
+          };
         }
         const overviewArea = LibraryBookingService.mergeStudySpaceOverviewArea(validZones);
         return {
@@ -761,7 +1193,13 @@ export class LibraryBookingService {
         bookings
       );
       if (hydratedArea === undefined) {
-        return fallbackResult;
+        return {
+          areas: liveAreas,
+          activeArea: targetArea,
+          isLive: false,
+          statusText: `${targetArea.name}座位明细查询失败 · 点击「刷新空位」重试`,
+          failure: ShuYoThereFailure.UNCERTAIN
+        };
       }
       liveAreas[targetIdx] = hydratedArea;
 
@@ -772,7 +1210,14 @@ export class LibraryBookingService {
         statusText: `实时空位 · there.shu.edu.cn（${startTime}-${endTime}）`
       };
     } catch (_err) {
-      return fallbackResult;
+      LibraryBookingService.logThere('slot/exception', `${venue.id}`);
+      return {
+        areas: fallbackAreas,
+        activeArea: fallbackActive,
+        isLive: false,
+        statusText: '暂时无法连接预约系统 · 校外请开启 WebVPN 或连接校园网后重试',
+        failure: ShuYoThereFailure.UNREACHABLE
+      };
     }
   }
 
@@ -838,10 +1283,11 @@ export class LibraryBookingService {
     }
 
     try {
-      const sessionId = await LibraryBookingService.ensureThereSession(venue.id, useWebVpn);
-      if (sessionId === undefined) {
-        return { ok: false, message: '图书馆实时会话已失效，请重新登录校园账号' };
+      const session = await LibraryBookingService.ensureThereSession(venue.id, useWebVpn);
+      if (session.failure !== ShuYoThereFailure.NONE) {
+        return { ok: false, message: session.message };
       }
+      const sessionId = session.sessionId;
       const profileJson = await LibraryBookingService.thereApiGet(
         venue.id,
         sessionId,
@@ -872,10 +1318,14 @@ export class LibraryBookingService {
         'meetingMembers': membersArr
       };
       const baseUrl = LibraryBookingService.thereBase(useWebVpn);
+      const bookingUrl = `${baseUrl}/api/v3/bookings`;
       const postResp = await HttpClientService.request(
         http.RequestMethod.POST,
-        `${baseUrl}/api/v3/bookings`,
-        LibraryBookingService.buildThereHeaders(venue.id, sessionId, useWebVpn, http.RequestMethod.POST),
+        bookingUrl,
+        LibraryBookingService.withGatewayCookie(
+          bookingUrl,
+          LibraryBookingService.buildThereHeaders(venue.id, sessionId, useWebVpn, http.RequestMethod.POST)
+        ),
         JSON.stringify(payload),
         12000
       );

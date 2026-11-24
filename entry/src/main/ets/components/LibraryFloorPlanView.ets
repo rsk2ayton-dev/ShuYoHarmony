@@ -1,7 +1,10 @@
+import { AnimatorOptions, AnimatorResult, LengthMetrics } from '@kit.ArkUI';
+import { ShuYoGlass, ShuYoMotion } from '../core/ShuYoMotionGlass';
 import { ShuYoLibrarySeat } from '../models/ShuYoModels';
 import {
   LibraryFloorPlanLayout,
-  ShuYoFloorPlanPoint
+  ShuYoFloorPlanPoint,
+  ShuYoSeatNeighborSummary
 } from '../services/LibraryFloorPlanLayout';
 import { ShuYoAppStore } from '../store/ShuYoAppStore';
 
@@ -60,6 +63,7 @@ export struct LibraryFloorPlanView {
   private cachedPointsKey: string = '';
   private cachedPoints: ShuYoFloorPlanPoint[] = [];
   private lastFrameRedrawMs: number = 0;
+  private zoomAnimator: AnimatorResult | undefined = undefined;
 
   private static readonly colorFree: string = '#16A34A';
   private static readonly colorQuiet: string = '#059669';
@@ -71,13 +75,19 @@ export struct LibraryFloorPlanView {
   private static readonly colorSelectedHalo: string = '#FACC15';
 
   aboutToAppear(): void {
+    this.lastVenueAreaKey = `${this.venueId}|${this.areaName}`;
     this.syncPointsCache();
+  }
+
+  aboutToDisappear(): void {
+    this.cancelZoomAnimation();
   }
 
   @Monitor('seats', 'selectedSeatId', 'filterMode', 'venueId', 'areaName', 'dataRevision')
   onFloorInputsChanged(): void {
     const key = `${this.venueId}|${this.areaName}`;
     if (this.lastVenueAreaKey !== key) {
+      this.cancelZoomAnimation();
       this.lastVenueAreaKey = key;
       this.zoomScale = 1.0;
       this.offsetX = 0;
@@ -122,17 +132,93 @@ export struct LibraryFloorPlanView {
     this.offsetY = this.clamp(this.offsetY, -maxOffsetY, maxOffsetY);
   }
 
+  private cancelZoomAnimation(): void {
+    const anim = this.zoomAnimator;
+    if (anim !== undefined) {
+      anim.cancel();
+      this.zoomAnimator = undefined;
+    }
+  }
+
+  private animateZoomTo(targetScale: number, targetX?: number, targetY?: number): void {
+    this.cancelZoomAnimation();
+    const startScale = this.zoomScale;
+    const startX = this.offsetX;
+    const startY = this.offsetY;
+    const clampedEndScale = this.clamp(Math.round(targetScale * 100) / 100, 1.0, 5.0);
+    let rawEndX = 0;
+    let rawEndY = 0;
+    if (clampedEndScale > 1.02) {
+      const ratio = startScale > 0 ? clampedEndScale / startScale : 1.0;
+      const maxX = (clampedEndScale - 1.0) * this.viewportW * 0.56;
+      const maxY = (clampedEndScale - 1.0) * this.viewportH * 0.56;
+      rawEndX = this.clamp(targetX !== undefined ? targetX : startX * ratio, -maxX, maxX);
+      rawEndY = this.clamp(targetY !== undefined ? targetY : startY * ratio, -maxY, maxY);
+    }
+    if (Math.abs(clampedEndScale - startScale) < 0.01 &&
+      Math.abs(rawEndX - startX) < 0.5 &&
+      Math.abs(rawEndY - startY) < 0.5) {
+      this.zoomScale = clampedEndScale;
+      this.offsetX = rawEndX;
+      this.offsetY = rawEndY;
+      this.clampViewportOffsets();
+      this.redrawCanvas();
+      return;
+    }
+    const uiCtx = this.getUIContext();
+    if (uiCtx === undefined) {
+      this.zoomScale = clampedEndScale;
+      this.offsetX = rawEndX;
+      this.offsetY = rawEndY;
+      this.clampViewportOffsets();
+      this.redrawCanvas();
+      return;
+    }
+    const opts: AnimatorOptions = {
+      duration: 240,
+      easing: 'fast-out-slow-in',
+      delay: 0,
+      fill: 'forwards',
+      direction: 'normal',
+      iterations: 1,
+      begin: 0,
+      end: 1
+    };
+    const animator = uiCtx.createAnimator(opts);
+    animator.onFrame = (t: number) => {
+      this.zoomScale = startScale + (clampedEndScale - startScale) * t;
+      this.offsetX = startX + (rawEndX - startX) * t;
+      this.offsetY = startY + (rawEndY - startY) * t;
+      this.clampViewportOffsets();
+      this.redrawCanvas();
+    };
+    animator.onFinish = () => {
+      this.zoomScale = clampedEndScale;
+      this.offsetX = rawEndX;
+      this.offsetY = rawEndY;
+      this.clampViewportOffsets();
+      this.redrawCanvas();
+      this.zoomAnimator = undefined;
+    };
+    this.zoomAnimator = animator;
+    animator.play();
+  }
+
   private adjustZoom(delta: number): void {
-    this.zoomScale = this.clamp(Number((this.zoomScale + delta).toFixed(2)), 1.0, 5.0);
-    this.clampViewportOffsets();
-    this.redrawCanvas();
+    const nextScale = Math.round((this.zoomScale + delta) * 100) / 100;
+    this.animateZoomTo(nextScale);
+  }
+
+  private toggleQuickZoom(): void {
+    if (this.zoomScale >= 2.2) {
+      this.resetZoom();
+    } else {
+      this.animateZoomTo(2.5);
+    }
   }
 
   private resetZoom(): void {
-    this.zoomScale = 1.0;
-    this.offsetX = 0;
-    this.offsetY = 0;
-    this.redrawCanvas();
+    this.animateZoomTo(1.0, 0, 0);
   }
 
   private requestThrottledRedraw(): void {
@@ -144,7 +230,10 @@ export struct LibraryFloorPlanView {
   }
 
   private getMapViewportHeight(): number {
-    return this.isFullScreen ? 460 : 300;
+    if (this.activeRealFloorPlan) {
+      return this.isFullScreen ? 360 : 252;
+    }
+    return this.isFullScreen ? 420 : 300;
   }
 
   private matchesFilter(pt: ShuYoFloorPlanPoint): boolean {
@@ -256,9 +345,10 @@ export struct LibraryFloorPlanView {
       this.ctx.fill();
     } else if (showQuietRing && !isDimmed) {
       this.ctx.beginPath();
-      this.ctx.arc(sx, sy, halfSize + 2.6, 0, Math.PI * 2);
-      this.ctx.fillStyle = LibraryFloorPlanView.colorQuietHalo;
-      this.ctx.fill();
+      this.ctx.arc(sx, sy, halfSize + Math.max(1.2, halfSize * 0.34), 0, Math.PI * 2);
+      this.ctx.lineWidth = Math.max(1.2, halfSize * 0.28);
+      this.ctx.strokeStyle = LibraryFloorPlanView.colorQuietHalo;
+      this.ctx.stroke();
     }
 
     this.ctx.save();
@@ -587,6 +677,7 @@ export struct LibraryFloorPlanView {
             .backgroundColor(this.store.colors.accentSoft)
             .borderRadius(8)
             .padding({ left: 8, right: 8 })
+            .clickEffect(ShuYoMotion.snappyClick)
             .onClick(() => {
               this.onRequestFullScreen();
             })
@@ -599,42 +690,65 @@ export struct LibraryFloorPlanView {
           .fontSize(11)
           .fontColor(this.store.colors.textTertiary)
         Blank()
-        Row({ space: 4 }) {
-          Button('-')
-            .width(24)
-            .height(24)
-            .padding(0)
-            .fontSize(13)
+        Row({ space: 6 }) {
+          Text('−')
+            .width(32)
+            .height(28)
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .textAlign(TextAlign.Center)
             .fontColor(this.store.colors.textPrimary)
             .backgroundColor(this.store.colors.surfaceAlt)
-            .borderRadius(7)
+            .borderRadius(8)
+            .border({ width: 1, color: this.store.colors.border })
+            .clickEffect(ShuYoMotion.snappyClick)
             .onClick(() => {
               this.adjustZoom(-0.6);
             })
           Text(`${this.zoomScale.toFixed(1)}×`)
-            .fontSize(11)
+            .fontSize(11.5)
+            .fontWeight(FontWeight.Medium)
             .fontColor(this.store.colors.textSecondary)
-            .width(34)
+            .width(36)
             .textAlign(TextAlign.Center)
-          Button('+')
-            .width(24)
-            .height(24)
-            .padding(0)
-            .fontSize(13)
+          Text('+')
+            .width(32)
+            .height(28)
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .textAlign(TextAlign.Center)
             .fontColor(this.store.colors.textPrimary)
             .backgroundColor(this.store.colors.surfaceAlt)
-            .borderRadius(7)
+            .borderRadius(8)
+            .border({ width: 1, color: this.store.colors.border })
+            .clickEffect(ShuYoMotion.snappyClick)
             .onClick(() => {
               this.adjustZoom(0.6);
             })
-          if (this.zoomScale > 1.02) {
-            Button('重置')
-              .height(24)
-              .fontSize(10.5)
+          Text(this.zoomScale >= 2.2 ? '还原' : '2.5×')
+            .height(28)
+            .padding({ left: 9, right: 9 })
+            .fontSize(11)
+            .fontWeight(FontWeight.Medium)
+            .textAlign(TextAlign.Center)
+            .fontColor(this.store.colors.accent)
+            .backgroundColor(this.store.colors.accentSoft)
+            .borderRadius(8)
+            .clickEffect(ShuYoMotion.snappyClick)
+            .onClick(() => {
+              this.toggleQuickZoom();
+            })
+          if (this.zoomScale > 1.02 && this.zoomScale < 2.2) {
+            Text('重置')
+              .height(28)
+              .padding({ left: 8, right: 8 })
+              .fontSize(11)
+              .textAlign(TextAlign.Center)
               .fontColor(this.store.colors.textSecondary)
               .backgroundColor(this.store.colors.surfaceAlt)
-              .borderRadius(7)
-              .padding({ left: 7, right: 7 })
+              .borderRadius(8)
+              .border({ width: 1, color: this.store.colors.border })
+              .clickEffect(ShuYoMotion.snappyClick)
               .onClick(() => {
                 this.resetZoom();
               })
@@ -689,11 +803,11 @@ export struct LibraryFloorPlanView {
 
           if (!this.activeRealFloorPlan) {
             Row({ space: 6 }) {
-              Text('暂无该馆实测平面图 · 按座位连号展示空/占（非真实桌位排布）')
+              Text('暂无实测平面图 · 仅按连号展示空/占（非真实桌位）')
                 .fontSize(10.5)
                 .fontWeight(FontWeight.Medium)
                 .fontColor('#92400E')
-                .maxLines(1)
+                .maxLines(2)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
             }
             .width('100%')
@@ -719,6 +833,7 @@ export struct LibraryFloorPlanView {
       .gesture(
         PinchGesture({ fingers: 2 })
           .onActionStart(() => {
+            this.cancelZoomAnimation();
             this.pinchStartScale = this.zoomScale;
           })
           .onActionUpdate((event: GestureEvent) => {
@@ -760,6 +875,242 @@ export struct LibraryFloorPlanView {
         : '点击任意座椅可查看该座位及前后连号空闲状态（非实际桌位排布）')
         .fontSize(11)
         .fontColor(this.store.colors.textTertiary)
+    }
+    .width('100%')
+  }
+}
+
+/**
+ * Reactive cinema-style bottom ticket card for the selected seat.
+ * Isolated as a @ComponentV2 struct so re-selecting or booking a seat immediately
+ * refreshes status badge, action button, and neighbor states.
+ */
+@ComponentV2
+export struct LibrarySeatTicketCard {
+  @Param point: ShuYoFloorPlanPoint | undefined = undefined;
+  @Param selectedDay: string = '';
+  @Param selectedStartTime: string = '';
+  @Param selectedEndTime: string = '';
+  @Param isSubmitting: boolean = false;
+  @Param compact: boolean = false;
+  @Param onBookTap: () => void = () => {};
+
+  private store: ShuYoAppStore = ShuYoAppStore.instance();
+
+  private isSeatBookable(seat: ShuYoLibrarySeat): boolean {
+    return !seat.isDisabled && !seat.isBusy && !seat.isBooked;
+  }
+
+  private getSeatStatusLabel(seat: ShuYoLibrarySeat): string {
+    if (seat.isDisabled) {
+      return '停用维护';
+    }
+    if (seat.isBooked) {
+      return '我的预约';
+    }
+    if (seat.isBusy) {
+      return '该时段已占用';
+    }
+    return '该时段空闲 · 可预约';
+  }
+
+  private getSeatCardBorder(seat: ShuYoLibrarySeat): string {
+    if (seat.isDisabled) {
+      return this.store.colors.border;
+    }
+    if (seat.isBooked) {
+      return '#2563EB';
+    }
+    if (seat.isBusy) {
+      return '#DC2626';
+    }
+    return '#16A34A';
+  }
+
+  private getSeatCardText(seat: ShuYoLibrarySeat): string {
+    if (seat.isDisabled) {
+      return this.store.colors.textMuted;
+    }
+    if (seat.isBooked) {
+      return '#1D4ED8';
+    }
+    if (seat.isBusy) {
+      return '#B91C1C';
+    }
+    return '#15803D';
+  }
+
+  private getShortDayLabel(): string {
+    if (this.selectedDay.length >= 10) {
+      return this.selectedDay.substring(5);
+    }
+    return this.selectedDay;
+  }
+
+  private getActionButtonLabel(seat: ShuYoLibrarySeat): string {
+    if (this.isSubmitting) {
+      return '提交中...';
+    }
+    if (this.isSeatBookable(seat)) {
+      return '预约此座';
+    }
+    return seat.isBooked ? '已预约' : '不可预约';
+  }
+
+  private getActionButtonFontColor(seat: ShuYoLibrarySeat): string {
+    if (this.isSeatBookable(seat)) {
+      return '#FFFFFF';
+    }
+    return seat.isBooked ? '#1D4ED8' : this.store.colors.textSecondary;
+  }
+
+  private getActionButtonBgColor(seat: ShuYoLibrarySeat): string {
+    if (this.isSeatBookable(seat)) {
+      return '#16A34A';
+    }
+    return seat.isBooked ? '#DBEAFE' : this.store.colors.surfaceAlt;
+  }
+
+  private getActionButtonBorderColor(seat: ShuYoLibrarySeat): string {
+    return seat.isBooked ? '#93C5FD' : this.store.colors.border;
+  }
+
+  private buildMatrixNeighborText(pt: ShuYoFloorPlanPoint): string {
+    const parts: string[] = [];
+    if (pt.leftNeighbor !== undefined) {
+      parts.push(`连号前位 ${pt.leftNeighbor.label} ${pt.leftNeighbor.statusText}`);
+    }
+    if (pt.rightNeighbor !== undefined) {
+      parts.push(`连号后位 ${pt.rightNeighbor.label} ${pt.rightNeighbor.statusText}`);
+    }
+    if (parts.length === 0) {
+      return '暂无连号相邻席位信息（以现场桌位为准）';
+    }
+    return `${parts.join(' · ')}（以现场桌位为准）`;
+  }
+
+  private formatNeighborText(prefix: string, summary: ShuYoSeatNeighborSummary): string {
+    return `${prefix} ${summary.label} ${summary.statusText}`;
+  }
+
+  build() {
+    Column() {
+      if (this.point !== undefined) {
+        Column({ space: 8 }) {
+          Row({ space: 10 }) {
+            Column({ space: 3 }) {
+              Row({ space: 6 }) {
+                Text(this.point.normalizedCode)
+                  .fontSize(this.compact ? 16 : 17)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(this.store.colors.textPrimary)
+
+                if (this.point.isQuiet) {
+                  Text('✨ 邻座皆空')
+                    .fontSize(10.5)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor('#065F46')
+                    .backgroundColor('#D1FAE5')
+                    .borderRadius(8)
+                    .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                } else if (this.isSeatBookable(this.point.seat) &&
+                  (this.point.leftNeighbor !== undefined || this.point.rightNeighbor !== undefined)) {
+                  Text('邻座有人')
+                    .fontSize(10.5)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor('#92400E')
+                    .backgroundColor('#FEF3C7')
+                    .borderRadius(8)
+                    .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                }
+
+                Text(this.getSeatStatusLabel(this.point.seat))
+                  .fontSize(10.5)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.getSeatCardText(this.point.seat))
+              }
+
+              Text(`${this.point.zoneHint} · ${this.getShortDayLabel()} ${this.selectedStartTime}-${this.selectedEndTime}`)
+                .fontSize(11.5)
+                .fontColor(this.store.colors.textTertiary)
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+
+            Button(this.getActionButtonLabel(this.point.seat))
+              .height(36)
+              .fontSize(13)
+              .enabled(this.isSeatBookable(this.point.seat) && !this.isSubmitting)
+              .fontColor(this.getActionButtonFontColor(this.point.seat))
+              .backgroundColor(this.getActionButtonBgColor(this.point.seat))
+              .border(this.isSeatBookable(this.point.seat)
+                ? { width: 0 }
+                : { width: 1, color: this.getActionButtonBorderColor(this.point.seat) })
+              .borderRadius(10)
+              .padding({ left: 14, right: 14 })
+              .clickEffect(ShuYoMotion.lightClick)
+              .onClick(() => {
+                this.onBookTap();
+              })
+          }
+          .width('100%')
+
+          if (this.point.isRealFloorPlan) {
+            if (this.point.leftNeighbor !== undefined ||
+              this.point.rightNeighbor !== undefined ||
+              this.point.oppositeNeighbor !== undefined) {
+              Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(6), cross: LengthMetrics.vp(6) } }) {
+                if (this.point.leftNeighbor !== undefined) {
+                  Text(this.formatNeighborText('左邻', this.point.leftNeighbor))
+                    .fontSize(11)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.point.leftNeighbor.isFree ? '#15803D' : '#B91C1C')
+                    .backgroundColor(this.point.leftNeighbor.isFree ? '#DCFCE7' : '#FEE2E2')
+                    .borderRadius(8)
+                    .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+                }
+                if (this.point.rightNeighbor !== undefined) {
+                  Text(this.formatNeighborText('右邻', this.point.rightNeighbor))
+                    .fontSize(11)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.point.rightNeighbor.isFree ? '#15803D' : '#B91C1C')
+                    .backgroundColor(this.point.rightNeighbor.isFree ? '#DCFCE7' : '#FEE2E2')
+                    .borderRadius(8)
+                    .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+                }
+                if (this.point.oppositeNeighbor !== undefined) {
+                  Text(this.formatNeighborText('对面', this.point.oppositeNeighbor))
+                    .fontSize(11)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.point.oppositeNeighbor.isFree ? '#15803D' : '#B91C1C')
+                    .backgroundColor(this.point.oppositeNeighbor.isFree ? '#DCFCE7' : '#FEE2E2')
+                    .borderRadius(8)
+                    .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+                }
+              }
+              .width('100%')
+            } else {
+              Text('独立圆台席位 · 无贴靠邻座')
+                .fontSize(11)
+                .fontColor('#059669')
+            }
+          } else {
+            Text(this.buildMatrixNeighborText(this.point))
+              .fontSize(11)
+              .fontColor(this.store.colors.textSecondary)
+          }
+        }
+        .width('100%')
+        .padding(this.compact ? 12 : 14)
+        .borderRadius(16)
+        .backgroundColor(this.compact ? this.store.colors.surfaceAlt : Color.Transparent)
+        .backgroundEffect(this.compact ? { radius: 0 } : ShuYoGlass.floatingCardBlur(this.store.colors.isDark))
+        .border({ width: 1.4, color: this.getSeatCardBorder(this.point.seat) })
+        .shadow(this.compact ? ShadowStyle.OUTER_DEFAULT_XS : ShadowStyle.OUTER_DEFAULT_SM)
+        .transition(ShuYoMotion.sheetCardTransition())
+      }
     }
     .width('100%')
   }
