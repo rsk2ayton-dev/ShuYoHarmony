@@ -98,6 +98,7 @@ struct AnnouncementTableView {
       }
       .scrollable(ScrollDirection.Horizontal)
       .scrollBar(BarState.Auto)
+      .edgeEffect(EdgeEffect.Spring)
       .width('100%')
       .borderRadius(10)
       .border({ width: 1, color: this.lineBorderColor })
@@ -130,6 +131,7 @@ export struct AnnouncementsPage {
   @Local detailError: string = '';
   private store: ShuYoAppStore = ShuYoAppStore.instance();
   private sourceCache: Map<string, ShuYoAnnouncementItem[]> = new Map<string, ShuYoAnnouncementItem[]>();
+  private detailScroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
     if (this.store.isDemoMode) {
@@ -204,6 +206,11 @@ export struct AnnouncementsPage {
     this.selectedDetail = item;
     this.detailError = '';
     this.showDetailSheet = true;
+    try {
+      this.detailScroller.scrollEdge(Edge.Top);
+    } catch (_err) {
+      // Ignore if scroller is not attached yet
+    }
     if (this.store.isDemoMode || item.blocks.length > 0) {
       return;
     }
@@ -241,7 +248,8 @@ export struct AnnouncementsPage {
     }
   }
 
-  private getDisplayedItems(): ShuYoAnnouncementItem[] {
+  @Computed
+  get displayedItems(): ShuYoAnnouncementItem[] {
     const kw = this.searchKeyword.trim().toLowerCase();
     const out: ShuYoAnnouncementItem[] = [];
     for (let i = 0; i < this.items.length; i++) {
@@ -349,8 +357,9 @@ export struct AnnouncementsPage {
 
   @Builder
   private detailSheetBuilder() {
-    Scroll() {
-      Column({ space: 12 }) {
+    Column() {
+      Scroll(this.detailScroller) {
+        Column({ space: 12 }) {
         if (this.selectedDetail !== undefined) {
           Text(this.selectedDetail.title)
             .fontSize(18)
@@ -506,12 +515,23 @@ export struct AnnouncementsPage {
         }
       }
       .width('100%')
-      .padding({ left: 20, right: 20, top: 8, bottom: 32 })
+      .padding({ left: 20, right: 20, top: 8, bottom: 48 })
       .alignItems(HorizontalAlign.Start)
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .align(Alignment.TopStart)
+    .scrollable(ScrollDirection.Vertical)
+    .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring)
+    .nestedScroll({
+      scrollForward: NestedScrollMode.PARENT_FIRST,
+      scrollBackward: NestedScrollMode.SELF_FIRST
+    })
+    .backgroundColor(Color.Transparent)
     }
     .width('100%')
     .height('100%')
-    .align(Alignment.TopStart)
     .backgroundColor(Color.Transparent)
     .bindSheet($$this.showImagePreview, this.imagePreviewSheetBuilder(), {
       height: SheetSize.LARGE,
@@ -595,7 +615,7 @@ export struct AnnouncementsPage {
           .width('100%')
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
-        } else if (this.errorMessage.length > 0 && this.getDisplayedItems().length === 0) {
+        } else if (this.errorMessage.length > 0 && this.displayedItems.length === 0) {
           ShuYoEmptyState({
             emptyTitle: '公告加载失败',
             emptyHint: this.errorMessage,
@@ -604,7 +624,7 @@ export struct AnnouncementsPage {
               this.refreshFeed(true);
             }
           })
-        } else if (this.getDisplayedItems().length === 0) {
+        } else if (this.displayedItems.length === 0) {
           ShuYoEmptyState({
             emptyTitle: '暂无符合条件的公告',
             emptyHint: '可点击下方按钮刷新或切换栏目查看',
@@ -615,7 +635,7 @@ export struct AnnouncementsPage {
           })
         } else {
           List({ space: 10 }) {
-            ForEach(this.getDisplayedItems(), (item: ShuYoAnnouncementItem, idx: number) => {
+            ForEach(this.displayedItems, (item: ShuYoAnnouncementItem, idx: number) => {
               ListItem() {
                 Column({ space: 6 }) {
                   Text(item.title)
@@ -658,7 +678,8 @@ export struct AnnouncementsPage {
           .layoutWeight(1)
           .width('100%')
           .padding({ left: 16, right: 16, bottom: 20 })
-          .scrollBar(BarState.Off)
+          .scrollBar(BarState.Auto)
+          .edgeEffect(EdgeEffect.Spring)
         }
       }
       .width('100%')

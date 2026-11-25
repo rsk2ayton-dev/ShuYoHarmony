@@ -9,6 +9,7 @@ import { NativeSystemService, ShuYoBundleMeta } from '../../services/NativeSyste
 import { PreferencesService } from '../../services/PreferencesService';
 import { ScheduleWidgetService } from '../../services/ScheduleWidgetService';
 import { SecureStorageService } from '../../services/SecureStorageService';
+import { ShuYoWebVpnFailure, WebVpnAuthService } from '../../services/WebVpnAuthService';
 import { ShuYoAppStore } from '../../store/ShuYoAppStore';
 import { ShuYoTopBar } from '../../components/ShuYoCommonViews';
 
@@ -173,6 +174,20 @@ export struct SettingsPage {
     const count = await ScheduleWidgetService.reloadWidgets(ctx);
     this.getUIContext().getPromptAction().showToast({
       message: count > 0 ? `已刷新 ${count} 张桌面课表卡片` : '桌面卡片快照已更新，可从桌面添加“今日课表”'
+    });
+  }
+
+  private async handleWebVpnToggle(val: boolean): Promise<void> {
+    if (val === this.store.useWebVpn) {
+      return;
+    }
+    this.store.setUseWebVpn(val);
+    if (!val || this.store.isDemoMode) {
+      return;
+    }
+    const vpn = await WebVpnAuthService.ensureSession();
+    this.getUIContext().getPromptAction().showToast({
+      message: vpn.failure === ShuYoWebVpnFailure.NONE ? 'WebVPN 已连接' : vpn.message
     });
   }
 
@@ -495,7 +510,7 @@ export struct SettingsPage {
                 Toggle({ type: ToggleType.Switch, isOn: this.store.useWebVpn })
                   .selectedColor(this.store.colors.accent)
                   .onChange((val: boolean) => {
-                    this.store.setUseWebVpn(val);
+                    this.handleWebVpnToggle(val);
                   })
               }
               .width('100%')

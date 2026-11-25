@@ -1,10 +1,12 @@
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ShuYoConstants } from '../core/ShuYoConstants';
 import { HttpClientService, ShuYoCookieJar } from './HttpClientService';
 import { JsonHelpers } from './JsonHelpers';
 import { PreferencesService } from './PreferencesService';
+import { WebVpnProtocol } from './WebVpnProtocol';
 
 export enum ShuYoWebVpnFailure {
   NONE = 'none',
@@ -43,6 +45,12 @@ export class WebVpnAuthService {
 
   static clearSession(): void {
     ShuYoCookieJar.clearDomain('webvpn.shu.edu.cn');
+    ShuYoCookieJar.clearDomain('https-oauth-shu-edu-cn-443.webvpn.shu.edu.cn');
+    ShuYoCookieJar.clearDomain(ShuYoConstants.webVpnNewssoProxyHost);
+  }
+
+  private static logVpn(stage: string, detail: string): void {
+    hilog.info(0x5348, 'ShuYoWebVpn', '%{public}s | %{public}s', stage, detail);
   }
 
   /** Reuses one handshake when several features start at the same time. */
@@ -99,24 +107,26 @@ export class WebVpnAuthService {
         `${ShuYoConstants.webVpnPortal}/auth/login`
       );
       if (startResp === undefined) {
+        WebVpnAuthService.logVpn('auth/start', 'failed');
         return WebVpnAuthService.fail(ShuYoWebVpnFailure.UNCERTAIN, 'WebVPN 统一认证启动失败 · 请稍后重试');
       }
-      const action = JsonHelpers.asObject(startResp['data']);
-      const loginUrl = JsonHelpers.str(JsonHelpers.asObject(action !== undefined ? action['action'] : undefined), 'login_url', '').trim();
+      const loginUrl = WebVpnProtocol.extractStartLoginUrl(JSON.stringify(startResp));
       if (loginUrl.length === 0) {
+        WebVpnAuthService.logVpn('auth/start', 'missing login_url');
         return WebVpnAuthService.fail(ShuYoWebVpnFailure.UNCERTAIN, 'WebVPN 未返回统一认证地址');
       }
 
       const callback = await WebVpnAuthService.walkAuthorize(loginUrl);
       if (callback.length === 0) {
+        WebVpnAuthService.logVpn('auth/authorize', 'no callback reached');
         return WebVpnAuthService.fail(
           ShuYoWebVpnFailure.LOGIN_REQUIRED,
           'WebVPN 统一认证未完成 · 请先登录校园账号'
         );
       }
-      const code = WebVpnAuthService.queryParam(callback, 'code');
-      const returnedState = WebVpnAuthService.queryParam(callback, 'state');
-      if (code.length === 0 || returnedState.length === 0) {
+      const parsedCb = WebVpnProtocol.parseCallbackParams(callback);
+      if (!parsedCb.isCallback) {
+        WebVpnAuthService.logVpn('auth/callback', 'invalid params');
         return WebVpnAuthService.fail(ShuYoWebVpnFailure.UNCERTAIN, 'WebVPN 授权回调缺少参数 · 请重试');
       }
 
@@ -124,9 +134,9 @@ export class WebVpnAuthService {
         'externalId': externalId,
         'data': WebVpnAuthService.stringifyInner({
           'callbackUrl': `${ShuYoConstants.webVpnPortal}${ShuYoConstants.webVpnCallbackPath}`,
-          'code': code,
+          'code': parsedCb.code,
           'deviceId': WebVpnAuthService.deviceId(),
-          'state': returnedState
+          'state': parsedCb.state
         })
       };
       const finishResp = await WebVpnAuthService.postJson(
@@ -135,15 +145,19 @@ export class WebVpnAuthService {
         `${ShuYoConstants.webVpnPortal}${ShuYoConstants.webVpnCallbackPath}`
       );
       if (finishResp === undefined || JsonHelpers.num(finishResp, 'code', -1) !== 0) {
+        WebVpnAuthService.logVpn('auth/finish', 'rejected');
         return WebVpnAuthService.fail(ShuYoWebVpnFailure.UNCERTAIN, 'WebVPN 登录未完成 · 请重试');
       }
       const confirmed = await WebVpnAuthService.readUserInfo();
       if (confirmed.failure !== ShuYoWebVpnFailure.NONE) {
+        WebVpnAuthService.logVpn('user/info', `failed=${confirmed.failure}`);
         return confirmed;
       }
       if (!WebVpnAuthService.hasPortalToken()) {
+        WebVpnAuthService.logVpn('user/info', 'missing webvpn-token');
         return WebVpnAuthService.fail(ShuYoWebVpnFailure.UNCERTAIN, 'WebVPN 未下发网关会话令牌 · 请重试');
       }
+      WebVpnAuthService.logVpn('handshake', 'ok');
       return confirmed;
     } catch (_err) {
       return WebVpnAuthService.fail(
@@ -171,31 +185,15 @@ export class WebVpnAuthService {
     if (resp.statusCode !== 200) {
       return WebVpnAuthService.fail(ShuYoWebVpnFailure.UNCERTAIN, 'WebVPN 身份确认失败');
     }
-    const obj = JsonHelpers.parseObject(resp.body);
-    if (obj === undefined || JsonHelpers.num(obj, 'code', -1) !== 0) {
-      return WebVpnAuthService.fail(ShuYoWebVpnFailure.LOGIN_REQUIRED, 'WebVPN 未能确认登录身份');
-    }
-    const data = JsonHelpers.asObject(obj['data']);
-    const userId = JsonHelpers.str(data, 'userId', '').trim();
-    if (userId.length === 0 || userId === '0') {
+    const userId = WebVpnProtocol.parseUserInfoUserId(resp.statusCode, resp.body);
+    if (userId.length === 0) {
       return WebVpnAuthService.fail(ShuYoWebVpnFailure.LOGIN_REQUIRED, 'WebVPN 未能确认登录身份');
     }
     return WebVpnAuthService.ok(userId);
   }
 
   private static directAuthorizeUrl(rawUrl: string): string {
-    const trimmed = rawUrl.trim();
-    const host = HttpClientService.extractHost(trimmed).toLowerCase();
-    if (host === ShuYoConstants.webVpnNewssoProxyHost) {
-      const schemeIdx = trimmed.indexOf('://');
-      if (schemeIdx >= 0) {
-        const afterScheme = trimmed.substring(schemeIdx + 3);
-        const slashIdx = afterScheme.indexOf('/');
-        const tail = slashIdx >= 0 ? afterScheme.substring(slashIdx) : '/';
-        return `${ShuYoConstants.ssoBaseUrl}${tail}`;
-      }
-    }
-    return trimmed;
+    return WebVpnProtocol.canonicalSsoUrl(rawUrl);
   }
 
   private static async fetchAuthListExternalId(listType: string): Promise<string> {
@@ -213,33 +211,15 @@ export class WebVpnAuthService {
     if (resp.statusCode !== 200) {
       return '';
     }
-    const obj = JsonHelpers.parseObject(resp.body);
-    if (obj === undefined || JsonHelpers.num(obj, 'code', -1) !== 0) {
-      return '';
-    }
-    const data = JsonHelpers.asObject(obj['data']);
-    const list = JsonHelpers.asArray(data !== undefined ? data['list'] : undefined);
-    for (let i = 0; i < list.length; i++) {
-      const item = JsonHelpers.asObject(list[i]);
-      if (item === undefined) {
-        continue;
-      }
-      if (JsonHelpers.num(item, 'authType', -1) === WebVpnAuthService.authTypeSchoolSso) {
-        const externalId = JsonHelpers.str(item, 'externalId', '').trim();
-        if (externalId.length > 0) {
-          return externalId;
-        }
-      }
-    }
-    return '';
+    return WebVpnProtocol.pickSchoolSsoExternalId(resp.body);
   }
 
   private static async pickExternalId(): Promise<string> {
-    const primary = await WebVpnAuthService.fetchAuthListExternalId('0');
+    const primary = await WebVpnAuthService.fetchAuthListExternalId('Login');
     if (primary.length > 0) {
       return primary;
     }
-    const secondary = await WebVpnAuthService.fetchAuthListExternalId('Login');
+    const secondary = await WebVpnAuthService.fetchAuthListExternalId('0');
     if (secondary.length > 0) {
       return secondary;
     }
@@ -249,7 +229,7 @@ export class WebVpnAuthService {
   /** Follows the SSO authorize chain until the gateway callback is reached. */
   private static async walkAuthorize(loginUrl: string): Promise<string> {
     let current = WebVpnAuthService.directAuthorizeUrl(loginUrl);
-    for (let hop = 0; hop < 8; hop++) {
+    for (let hop = 0; hop < 16; hop++) {
       const resp = await HttpClientService.request(
         http.RequestMethod.GET,
         current,
@@ -260,17 +240,15 @@ export class WebVpnAuthService {
         undefined,
         12000
       );
-      const next = resp.location.length > 0 ? HttpClientService.resolveUrl(current, resp.location) : '';
-      if (next.length === 0) {
+      if (resp.statusCode < 300 || resp.statusCode >= 400 || resp.location.length === 0) {
         return '';
       }
-      const host = HttpClientService.extractHost(next).toLowerCase();
-      const path = HttpClientService.extractPath(next);
-      if (host === 'webvpn.shu.edu.cn' &&
-        path === ShuYoConstants.webVpnCallbackPath &&
-        WebVpnAuthService.queryParam(next, 'code').length > 0) {
+      const next = HttpClientService.resolveUrl(current, resp.location);
+      const parsedCb = WebVpnProtocol.parseCallbackParams(next);
+      if (parsedCb.isCallback) {
         return next;
       }
+      const path = HttpClientService.extractPath(next);
       if (path.includes('/oauth2/login/') || path === '/login' || path.endsWith('/login')) {
         return '';
       }
@@ -290,6 +268,7 @@ export class WebVpnAuthService {
       {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
+        'Origin': ShuYoConstants.webVpnPortal,
         'Referer': referer
       },
       JSON.stringify(body),

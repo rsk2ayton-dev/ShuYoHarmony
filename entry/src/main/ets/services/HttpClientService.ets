@@ -4,6 +4,7 @@ import { util } from '@kit.ArkTS';
 import { ShuYoConstants } from '../core/ShuYoConstants';
 import { SecureStorageService } from './SecureStorageService';
 import { JsonHelpers } from './JsonHelpers';
+import { WebVpnProtocol } from './WebVpnProtocol';
 
 export interface ShuYoHttpResult {
   statusCode: number;
@@ -129,7 +130,7 @@ export class ShuYoCookieJar {
       const rawPath = rc.path !== undefined ? rc.path.trim() : '';
       const path = rawPath.startsWith('/') ? rawPath : fallbackPath;
       const val = rc.value !== undefined ? rc.value : '';
-      const expired = (rc.maxAge !== undefined && rc.maxAge <= 0) || val.length === 0 || val === 'deleteMe';
+      const expired = (rc.maxAge !== undefined && rc.maxAge < 0) || val.length === 0 || val === 'deleteMe';
       ShuYoCookieJar.upsertCookieInMemory({
         name: name,
         value: val,
@@ -270,30 +271,7 @@ export class ShuYoCookieJar {
   }
 
   private static remapWebVpnCookieDomain(requestHost: string, cookieDomain: string): string {
-    const hostLower = requestHost.trim().toLowerCase();
-    const webVpnSuffix = '.webvpn.shu.edu.cn';
-    if (!hostLower.endsWith(webVpnSuffix)) {
-      return '';
-    }
-    let dashedProxy = hostLower.substring(0, hostLower.length - webVpnSuffix.length);
-    if (dashedProxy.startsWith('https-')) {
-      dashedProxy = dashedProxy.substring(6);
-    } else if (dashedProxy.startsWith('http-')) {
-      dashedProxy = dashedProxy.substring(5);
-    }
-    dashedProxy = dashedProxy.replace(new RegExp('-\\d+$'), '');
-    let cleanCookie = cookieDomain.trim().toLowerCase();
-    if (cleanCookie.startsWith('.')) {
-      cleanCookie = cleanCookie.substring(1);
-    }
-    if (cleanCookie.length === 0 || dashedProxy.length === 0) {
-      return '';
-    }
-    const dashedCookie = cleanCookie.replace(new RegExp('\\.', 'g'), '-');
-    if (dashedProxy === dashedCookie || dashedProxy.endsWith(`-${dashedCookie}`)) {
-      return hostLower;
-    }
-    return '';
+    return WebVpnProtocol.remapWebVpnCookieDomain(requestHost, cookieDomain);
   }
 
   private static pathMatches(requestPath: string, cookiePath: string): boolean {
@@ -309,66 +287,15 @@ export class ShuYoCookieJar {
 
 export class HttpClientService {
   static extractHost(url: string): string {
-    const schemeIdx = url.indexOf('://');
-    if (schemeIdx < 0) {
-      return '';
-    }
-    const rest = url.substring(schemeIdx + 3);
-    const slashIdx = rest.indexOf('/');
-    const qIdx = rest.indexOf('?');
-    let endIdx = rest.length;
-    if (slashIdx >= 0 && slashIdx < endIdx) {
-      endIdx = slashIdx;
-    }
-    if (qIdx >= 0 && qIdx < endIdx) {
-      endIdx = qIdx;
-    }
-    const hostPort = rest.substring(0, endIdx);
-    const atIdx = hostPort.indexOf('@');
-    const cleanHostPort = atIdx >= 0 ? hostPort.substring(atIdx + 1) : hostPort;
-    const colonIdx = cleanHostPort.indexOf(':');
-    return colonIdx >= 0 ? cleanHostPort.substring(0, colonIdx) : cleanHostPort;
+    return WebVpnProtocol.extractHost(url);
   }
 
   static extractPath(url: string): string {
-    const schemeIdx = url.indexOf('://');
-    if (schemeIdx < 0) {
-      return '/';
-    }
-    const rest = url.substring(schemeIdx + 3);
-    const slashIdx = rest.indexOf('/');
-    if (slashIdx < 0) {
-      return '/';
-    }
-    const pathQuery = rest.substring(slashIdx);
-    const qIdx = pathQuery.indexOf('?');
-    const hashIdx = pathQuery.indexOf('#');
-    let endIdx = pathQuery.length;
-    if (qIdx >= 0 && qIdx < endIdx) {
-      endIdx = qIdx;
-    }
-    if (hashIdx >= 0 && hashIdx < endIdx) {
-      endIdx = hashIdx;
-    }
-    const path = pathQuery.substring(0, endIdx);
-    return path.length > 0 ? path : '/';
+    return WebVpnProtocol.extractPath(url);
   }
 
   static extractOrigin(url: string): string {
-    const schemeIdx = url.indexOf('://');
-    if (schemeIdx < 0) {
-      return ShuYoConstants.ssoBaseUrl;
-    }
-    const slashIdx = url.indexOf('/', schemeIdx + 3);
-    const qIdx = url.indexOf('?', schemeIdx + 3);
-    let endIdx = url.length;
-    if (slashIdx >= 0 && slashIdx < endIdx) {
-      endIdx = slashIdx;
-    }
-    if (qIdx >= 0 && qIdx < endIdx) {
-      endIdx = qIdx;
-    }
-    return url.substring(0, endIdx);
+    return WebVpnProtocol.extractOrigin(url);
   }
 
   static defaultCookiePath(url: string): string {
@@ -378,94 +305,15 @@ export class HttpClientService {
   }
 
   static isShuHost(host: string): boolean {
-    const normalized = host.toLowerCase();
-    return normalized === 'shu.edu.cn' || normalized.endsWith('.shu.edu.cn');
+    return WebVpnProtocol.isShuHost(host);
   }
 
   static upgradeShuHttpUrl(rawUrl: string): string {
-    if (!rawUrl.startsWith('http://')) {
-      return rawUrl;
-    }
-    const host = HttpClientService.extractHost(rawUrl);
-    if (HttpClientService.isShuHost(host)) {
-      return 'https://' + rawUrl.substring(7);
-    }
-    return rawUrl;
-  }
-
-  private static normalizePathWithSuffix(rawPathWithSuffix: string): string {
-    const qIdx = rawPathWithSuffix.indexOf('?');
-    const hashIdx = rawPathWithSuffix.indexOf('#');
-    let splitIdx = rawPathWithSuffix.length;
-    if (qIdx >= 0 && qIdx < splitIdx) {
-      splitIdx = qIdx;
-    }
-    if (hashIdx >= 0 && hashIdx < splitIdx) {
-      splitIdx = hashIdx;
-    }
-    const pathPart = rawPathWithSuffix.substring(0, splitIdx);
-    const suffix = rawPathWithSuffix.substring(splitIdx);
-    const hasTrailingSlash = pathPart.endsWith('/');
-    const rawSegments = pathPart.split('/');
-    const stack: string[] = [];
-    for (let i = 0; i < rawSegments.length; i++) {
-      const seg = rawSegments[i];
-      if (seg.length === 0 || seg === '.') {
-        continue;
-      }
-      if (seg === '..') {
-        if (stack.length > 0) {
-          stack.pop();
-        }
-      } else {
-        stack.push(seg);
-      }
-    }
-    let normalizedPath = '/' + stack.join('/');
-    if (hasTrailingSlash && stack.length > 0 && !normalizedPath.endsWith('/')) {
-      normalizedPath += '/';
-    }
-    return normalizedPath + suffix;
+    return WebVpnProtocol.upgradeShuHttpUrl(rawUrl);
   }
 
   static resolveUrl(baseUrl: string, relativeOrAbs: string): string {
-    const trimmed = relativeOrAbs.trim();
-    if (trimmed.length === 0) {
-      return HttpClientService.upgradeShuHttpUrl(baseUrl);
-    }
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return HttpClientService.upgradeShuHttpUrl(trimmed);
-    }
-    const schemeEnd = baseUrl.indexOf('://');
-    if (schemeEnd < 0) {
-      return HttpClientService.upgradeShuHttpUrl(trimmed);
-    }
-    const scheme = baseUrl.substring(0, schemeEnd);
-    if (trimmed.startsWith('//')) {
-      return HttpClientService.upgradeShuHttpUrl(`${scheme}:${trimmed}`);
-    }
-    const origin = HttpClientService.extractOrigin(baseUrl);
-    if (trimmed.startsWith('/')) {
-      const normRootPath = HttpClientService.normalizePathWithSuffix(trimmed);
-      return HttpClientService.upgradeShuHttpUrl(origin + normRootPath);
-    }
-    if (trimmed.startsWith('?')) {
-      const qIdx = baseUrl.indexOf('?');
-      const hashIdx = baseUrl.indexOf('#');
-      let cut = baseUrl.length;
-      if (qIdx >= 0 && qIdx < cut) {
-        cut = qIdx;
-      }
-      if (hashIdx >= 0 && hashIdx < cut) {
-        cut = hashIdx;
-      }
-      return HttpClientService.upgradeShuHttpUrl(baseUrl.substring(0, cut) + trimmed);
-    }
-    const basePath = HttpClientService.extractPath(baseUrl);
-    const lastSlash = basePath.lastIndexOf('/');
-    const baseDir = lastSlash >= 0 ? basePath.substring(0, lastSlash + 1) : '/';
-    const normJoined = HttpClientService.normalizePathWithSuffix(`${baseDir}${trimmed}`);
-    return HttpClientService.upgradeShuHttpUrl(`${origin}${normJoined}`);
+    return WebVpnProtocol.resolveUrl(baseUrl, relativeOrAbs);
   }
 
   private static toRcpMethod(method: http.RequestMethod): rcp.HttpMethod {
@@ -529,16 +377,29 @@ export class HttpClientService {
 
     const headerMap: Record<string, string | string[] | undefined> = {};
     headerMap['user-agent'] = ShuYoConstants.userAgent;
-    const cookieStr = ShuYoCookieJar.headerFor(targetUrl);
-    if (cookieStr.length > 0) {
-      headerMap['cookie'] = cookieStr;
-    }
+    let cookieVal = ShuYoCookieJar.headerFor(targetUrl);
     if (extraHeaders !== undefined) {
       const keys = Object.keys(extraHeaders);
       for (let i = 0; i < keys.length; i++) {
         const k = keys[i];
-        headerMap[k.toLowerCase()] = extraHeaders[k];
+        const lowerK = k.toLowerCase();
+        if (lowerK === 'cookie') {
+          const overrideCookie = extraHeaders[k].trim();
+          if (overrideCookie.length > 0) {
+            cookieVal = overrideCookie;
+          }
+        } else {
+          headerMap[lowerK] = extraHeaders[k];
+        }
       }
+    }
+    const gatewayCookie = WebVpnProtocol.buildGatewayCookieHeader(
+      targetUrl,
+      cookieVal,
+      ShuYoCookieJar.getCookieValue(ShuYoConstants.webVpnPortal, 'webvpn-token')
+    );
+    if (gatewayCookie.length > 0) {
+      headerMap['cookie'] = gatewayCookie;
     }
     const reqHeaders = headerMap as rcp.RequestHeaders;
     const reqContent: string | undefined = body !== undefined
@@ -548,19 +409,16 @@ export class HttpClientService {
 
     try {
       const resp = await session.fetch(req);
-      if (resp.cookies !== undefined && resp.cookies.length > 0) {
+      const rawHdrs = resp.headers as Record<string, string | string[] | undefined>;
+      const setCookieVal = rawHdrs['set-cookie'];
+      if (Array.isArray(setCookieVal) && setCookieVal.length > 0) {
+        ShuYoCookieJar.saveFromSetCookieHeaders(targetUrl, setCookieVal);
+      } else if (typeof setCookieVal === 'string' && setCookieVal.length > 0) {
+        ShuYoCookieJar.saveFromSetCookieHeaders(targetUrl, [setCookieVal]);
+      } else if (resp.cookies !== undefined && resp.cookies.length > 0) {
         ShuYoCookieJar.saveFromRcpCookies(targetUrl, resp.cookies);
-      } else {
-        const rawHdrs = resp.headers as Record<string, string | string[] | undefined>;
-        const setCookieVal = rawHdrs['set-cookie'];
-        if (Array.isArray(setCookieVal)) {
-          ShuYoCookieJar.saveFromSetCookieHeaders(targetUrl, setCookieVal);
-        } else if (typeof setCookieVal === 'string' && setCookieVal.length > 0) {
-          ShuYoCookieJar.saveFromSetCookieHeaders(targetUrl, [setCookieVal]);
-        }
       }
 
-      const rawHdrs = resp.headers as Record<string, string | string[] | undefined>;
       const normalizedHeaders: Record<string, string> = {};
       let location = '';
       const hKeys = Object.keys(rawHdrs);
@@ -606,6 +464,7 @@ export class HttpClientService {
     extraHeaders?: Record<string, string>
   ): Promise<ShuYoHttpResult> {
     let current = HttpClientService.upgradeShuHttpUrl(url);
+    const startedProxied = WebVpnProtocol.isWebVpnProxiedHost(HttpClientService.extractHost(current));
     let lastResult: ShuYoHttpResult = {
       statusCode: 0,
       body: '',
@@ -615,7 +474,12 @@ export class HttpClientService {
     for (let i = 0; i <= maxRedirects; i++) {
       lastResult = await HttpClientService.request(http.RequestMethod.GET, current, extraHeaders);
       if (lastResult.statusCode >= 300 && lastResult.statusCode < 400 && lastResult.location.length > 0) {
-        current = HttpClientService.resolveUrl(current, lastResult.location);
+        const nextUrl = HttpClientService.resolveUrl(current, lastResult.location);
+        if (startedProxied && WebVpnProtocol.isWebVpnPortalRedirect(lastResult.statusCode, nextUrl)) {
+          lastResult.location = nextUrl;
+          return lastResult;
+        }
+        current = nextUrl;
       } else {
         lastResult.location = current;
         return lastResult;

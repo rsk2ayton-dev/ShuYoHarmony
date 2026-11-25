@@ -6,9 +6,11 @@ import {
   ShuYoClassroomRoom,
   ShuYoClassroomSection
 } from '../models/ShuYoModels';
-import { HttpClientService } from './HttpClientService';
+import { HttpClientService, ShuYoHttpResult } from './HttpClientService';
 import { JsonHelpers } from './JsonHelpers';
 import { RawFileService } from './RawFileService';
+import { ShuYoWebVpnFailure, WebVpnAuthService } from './WebVpnAuthService';
+import { WebVpnProtocol } from './WebVpnProtocol';
 
 export interface ShuYoClassroomOptions {
   buildings: ShuYoClassroomBuilding[];
@@ -33,21 +35,56 @@ export class ClassroomService {
     return ClassroomService.parseRooms(obj);
   }
 
+  private static isWebVpnAuthRejection(useWebVpn: boolean, resp: ShuYoHttpResult): boolean {
+    if (!useWebVpn) {
+      return false;
+    }
+    return resp.statusCode === 401 ||
+      resp.statusCode === 403 ||
+      WebVpnProtocol.isWebVpnPortalRedirect(resp.statusCode, resp.location);
+  }
+
+  private static async postWithWebVpnRecovery(
+    url: string,
+    headers: Record<string, string>,
+    body: string | undefined,
+    useWebVpn: boolean
+  ): Promise<ShuYoHttpResult> {
+    if (useWebVpn) {
+      const vpn = await WebVpnAuthService.ensureSession();
+      if (vpn.failure !== ShuYoWebVpnFailure.NONE) {
+        throw new Error(vpn.message);
+      }
+    }
+    let resp = await HttpClientService.request(http.RequestMethod.POST, url, headers, body);
+    if (ClassroomService.isWebVpnAuthRejection(useWebVpn, resp)) {
+      WebVpnAuthService.clearSession();
+      const retryVpn = await WebVpnAuthService.ensureSession();
+      if (retryVpn.failure !== ShuYoWebVpnFailure.NONE) {
+        throw new Error(retryVpn.message);
+      }
+      resp = await HttpClientService.request(http.RequestMethod.POST, url, headers, body);
+    }
+    return resp;
+  }
+
   static async fetchLiveOptions(useWebVpn: boolean): Promise<ShuYoClassroomOptions> {
     const base = useWebVpn ? ShuYoConstants.classroomWebVpnBase : ShuYoConstants.classroomDirectBase;
     const headers: Record<string, string> = {
       'Accept': 'application/json',
       'Referer': `${base}/`
     };
-    const formResp = await HttpClientService.request(
-      http.RequestMethod.POST,
+    const formResp = await ClassroomService.postWithWebVpnRecovery(
       `${base}/build/findSearchRoomSearchForm`,
-      headers
+      headers,
+      undefined,
+      useWebVpn
     );
-    const secResp = await HttpClientService.request(
-      http.RequestMethod.POST,
+    const secResp = await ClassroomService.postWithWebVpnRecovery(
       `${base}/course/findSection`,
-      headers
+      headers,
+      undefined,
+      useWebVpn
     );
     if (formResp.statusCode < 200 || formResp.statusCode >= 300) {
       throw new Error(`空教室请求失败 (${formResp.statusCode})`);
@@ -72,15 +109,18 @@ export class ClassroomService {
       'Referer': `${base}/`
     };
     const body = `buildId=${encodeURIComponent(String(buildingId))}&courseDate=${encodeURIComponent(dateStr)}`;
-    const resp = await HttpClientService.request(
-      http.RequestMethod.POST,
+    const resp = await ClassroomService.postWithWebVpnRecovery(
       `${base}/build/findBuildRoomType`,
       headers,
-      body
+      body,
+      useWebVpn
     );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw new Error(`空教室查询请求失败 (${resp.statusCode})`);
+    }
     const obj = JsonHelpers.parseObject(resp.body);
     if (obj === undefined) {
-      throw new Error('空教室查询返回数据无效');
+      throw new Error(useWebVpn ? 'WebVPN 会话未登录或已失效' : '空教室查询返回数据无效');
     }
     return ClassroomService.parseRooms(obj);
   }

@@ -40,6 +40,7 @@ export struct LibraryBookingPage {
   @Local dataStatusText: string = '正在加载座位分布...';
   @Local isLoadingSeats: boolean = false;
   @Local isSubmittingBooking: boolean = false;
+  @Local cancellingBookingId: string = '';
   @Local selectedSeatId: string = '';
   @Local selectedPoint: ShuYoFloorPlanPoint | undefined = undefined;
   @Local showFullScreenMapSheet: boolean = false;
@@ -395,6 +396,24 @@ export struct LibraryBookingPage {
       }
     } finally {
       this.isSubmittingBooking = false;
+    }
+  }
+
+  private async cancelBookingRecord(rec: ShuYoLibraryBookingRecord): Promise<void> {
+    if (this.cancellingBookingId.length > 0) {
+      return;
+    }
+    this.cancellingBookingId = rec.id;
+    try {
+      const isLiveRecord = !this.store.isDemoMode && !rec.id.startsWith('bk-');
+      const res = await LibraryBookingService.cancelBooking(rec, isLiveRecord, this.store.useWebVpn);
+      this.getUIContext().getPromptAction().showToast({ message: res.message });
+      if (res.ok) {
+        this.store.cancelLibraryBooking(rec.id);
+        await this.reloadSeatAvailability();
+      }
+    } finally {
+      this.cancellingBookingId = '';
     }
   }
 
@@ -1096,16 +1115,16 @@ export struct LibraryBookingPage {
                     .layoutWeight(1)
 
                     if (rec.status === 'BOOKING') {
-                      Button('取消')
+                      Button(this.cancellingBookingId === rec.id ? '取消中...' : '取消')
                         .height(32)
                         .fontSize(12)
                         .fontColor(this.store.colors.onDanger)
                         .backgroundColor(this.store.colors.danger)
                         .borderRadius(10)
                         .padding({ left: 12, right: 12 })
+                        .enabled(this.cancellingBookingId.length === 0)
                         .onClick(() => {
-                          this.store.cancelLibraryBooking(rec.id);
-                          this.reloadSeatAvailability();
+                          this.cancelBookingRecord(rec);
                         })
                     }
                   }

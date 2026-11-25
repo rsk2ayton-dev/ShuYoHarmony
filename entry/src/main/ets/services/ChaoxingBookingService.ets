@@ -1,6 +1,4 @@
-import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { http } from '@kit.NetworkKit';
-import { util } from '@kit.ArkTS';
 import { ShuYoConstants } from '../core/ShuYoConstants';
 import {
   ShuYoLibraryArea,
@@ -10,6 +8,7 @@ import {
 } from '../models/ShuYoModels';
 import { HttpClientService, ShuYoCookieJar, ShuYoHttpResult } from './HttpClientService';
 import { JsonHelpers } from './JsonHelpers';
+import { LibraryBookingProtocol } from './LibraryBookingProtocol';
 
 export interface ChaoxingFetchResult {
   areas: ShuYoLibraryArea[];
@@ -31,7 +30,10 @@ export class ChaoxingBookingService {
   private static readonly indexPath: string = '/front/third/apps/seat/index';
   private static readonly selectPath: string = '/front/third/apps/seat/select';
   private static readonly oauthRedirectHost: string = 'zhstsg-jx.5read.com';
+  private static readonly submitIntervalMs: number = 10000;
   private static verifiedUid: string = '';
+  private static isSubmitting: boolean = false;
+  private static lastSubmitAt: number = 0;
 
   static clearSession(): void {
     ChaoxingBookingService.verifiedUid = '';
@@ -259,15 +261,7 @@ export class ChaoxingBookingService {
   }
 
   private static normalizeSeatNum(raw: string): string {
-    const num = parseInt(raw.trim(), 10);
-    if (!Number.isFinite(num) || num <= 0) {
-      return raw.trim();
-    }
-    let out = `${num}`;
-    while (out.length < 3) {
-      out = `0${out}`;
-    }
-    return out;
+    return LibraryBookingProtocol.normalizeChaoxingSeatNum(raw);
   }
 
   private static hasLocalBookingOverlap(
@@ -474,209 +468,116 @@ export class ChaoxingBookingService {
     if (day !== ChaoxingBookingService.todayDateStr()) {
       return { ok: false, message: `${venue.name}超星系统仅支持预约当天时段`, bookingId: '' };
     }
+    if (ChaoxingBookingService.isSubmitting) {
+      return { ok: false, message: '预约正在提交，请等待结果', bookingId: '' };
+    }
+    if (Date.now() - ChaoxingBookingService.lastSubmitAt < ChaoxingBookingService.submitIntervalMs) {
+      return { ok: false, message: '同一用户 10 秒内只能提交一次，请稍后重试', bookingId: '' };
+    }
+    ChaoxingBookingService.isSubmitting = true;
+    try {
+      const ok = await ChaoxingBookingService.ensureSession();
+      if (!ok) {
+        return { ok: false, message: '超星图书馆会话已失效，请重新登录校园账号', bookingId: '' };
+      }
+
+      const indexUrl = ChaoxingBookingService.getIndexUrl();
+      const selectUrl =
+        `${ShuYoConstants.chaoxingBaseUrl}${ChaoxingBookingService.selectPath}` +
+        `?deptIdEnc=${encodeURIComponent(ShuYoConstants.chaoxingFidEnc)}` +
+        `&id=${encodeURIComponent(area.id)}` +
+        `&day=${encodeURIComponent(day)}` +
+        `&backLevel=2` +
+        `&fidEnc=${encodeURIComponent(ShuYoConstants.chaoxingFidEnc)}`;
+
+      const selectResp = await ChaoxingBookingService.getFollowChaoxingRedirects(selectUrl, indexUrl);
+      if (selectResp.statusCode !== 200) {
+        return { ok: false, message: '无法打开超星选座页面，请稍后重试', bookingId: '' };
+      }
+      if (selectResp.location.includes('/front/apps/reserve/error')) {
+        return { ok: false, message: '当前区域暂时不可预约', bookingId: '' };
+      }
+
+      const salt = LibraryBookingProtocol.extractChaoxingSubmitSalt(selectResp.body);
+      if (salt.length === 0) {
+        return { ok: false, message: '未获取到选座校验参数，请刷新后重试', bookingId: '' };
+      }
+
+      const seatNum = ChaoxingBookingService.normalizeSeatNum(seat.seatLabel);
+      const plain = LibraryBookingProtocol.buildChaoxingSubmitPlain(
+        area.id,
+        seatNum,
+        day,
+        startTime,
+        endTime,
+        ShuYoConstants.chaoxingFidEnc,
+        salt
+      );
+      const enc = ChaoxingBookingService.md5Hex(plain);
+
+      const formBody = ChaoxingBookingService.encodeForm({
+        'captcha': '',
+        'day': day,
+        'deptIdEnc': ShuYoConstants.chaoxingFidEnc,
+        'endTime': endTime,
+        'roomId': area.id,
+        'seatNum': seatNum,
+        'startTime': startTime,
+        'wyToken': '',
+        'enc': enc
+      });
+
+      ChaoxingBookingService.lastSubmitAt = Date.now();
+      const submitResp = await HttpClientService.request(
+        http.RequestMethod.POST,
+        `${ShuYoConstants.chaoxingBaseUrl}/data/apps/seat/submit`,
+        ChaoxingBookingService.buildHeaders(true, selectUrl, true),
+        formBody,
+        15000
+      );
+      const parsed = LibraryBookingProtocol.parseChaoxingSubmitResponse(submitResp.statusCode, submitResp.body);
+      if (!parsed.ok) {
+        return { ok: false, message: parsed.message, bookingId: '' };
+      }
+      return {
+        ok: true,
+        message: `实时预约成功：${venue.name} ${area.name} ${seatNum}号（${startTime}-${endTime}）`,
+        bookingId: `cx:${venue.id}:${parsed.bookingId}`
+      };
+    } catch (_err) {
+      return { ok: false, message: '预约提交结果未确认，请先查看我的预约，勿直接重试', bookingId: '' };
+    } finally {
+      ChaoxingBookingService.isSubmitting = false;
+    }
+  }
+
+  static async cancelBooking(reserveId: string): Promise<ChaoxingSubmitResult> {
+    const cleanId = reserveId.trim();
+    if (!new RegExp('^\\d+$').test(cleanId)) {
+      return { ok: false, message: '超星预约编号无效，无法取消', bookingId: '' };
+    }
     const ok = await ChaoxingBookingService.ensureSession();
     if (!ok) {
       return { ok: false, message: '超星图书馆会话已失效，请重新登录校园账号', bookingId: '' };
     }
-
     const indexUrl = ChaoxingBookingService.getIndexUrl();
-    const selectUrl =
-      `${ShuYoConstants.chaoxingBaseUrl}${ChaoxingBookingService.selectPath}` +
-      `?deptIdEnc=${encodeURIComponent(ShuYoConstants.chaoxingFidEnc)}` +
-      `&id=${encodeURIComponent(area.id)}` +
-      `&day=${encodeURIComponent(day)}` +
-      `&backLevel=2` +
-      `&fidEnc=${encodeURIComponent(ShuYoConstants.chaoxingFidEnc)}`;
-
-    const selectResp = await ChaoxingBookingService.getFollowChaoxingRedirects(selectUrl, indexUrl);
-    if (selectResp.statusCode !== 200) {
-      return { ok: false, message: '无法打开超星选座页面，请稍后重试', bookingId: '' };
-    }
-    if (selectResp.location.includes('/front/apps/reserve/error')) {
-      return { ok: false, message: '当前区域暂时不可预约', bookingId: '' };
-    }
-
-    const saltMatch = new RegExp('id=["\']submit_enc["\']\\s+value=["\']([^"\']+)["\']', 'i').exec(selectResp.body);
-    const salt = saltMatch !== null ? saltMatch[1].trim() : '';
-    if (salt.length === 0) {
-      return { ok: false, message: '未获取到选座校验参数，请刷新后重试', bookingId: '' };
-    }
-
-    const seatNum = ChaoxingBookingService.normalizeSeatNum(seat.seatLabel);
-    const plain =
-      `[captcha=]` +
-      `[day=${day}]` +
-      `[deptIdEnc=${ShuYoConstants.chaoxingFidEnc}]` +
-      `[endTime=${endTime}]` +
-      `[roomId=${area.id}]` +
-      `[seatNum=${seatNum}]` +
-      `[startTime=${startTime}]` +
-      `[wyToken=]` +
-      `[${salt}]`;
-    const enc = ChaoxingBookingService.md5Hex(plain);
-
-    const formBody = ChaoxingBookingService.encodeForm({
-      'captcha': '',
-      'day': day,
-      'deptIdEnc': ShuYoConstants.chaoxingFidEnc,
-      'endTime': endTime,
-      'roomId': area.id,
-      'seatNum': seatNum,
-      'startTime': startTime,
-      'wyToken': '',
-      'enc': enc
-    });
-
-    const submitResp = await HttpClientService.request(
-      http.RequestMethod.POST,
-      `${ShuYoConstants.chaoxingBaseUrl}/data/apps/seat/submit`,
-      ChaoxingBookingService.buildHeaders(true, selectUrl, true),
-      formBody,
-      15000
+    const cancelUrl = `${ShuYoConstants.chaoxingBaseUrl}/data/apps/seat/cancel?id=${encodeURIComponent(cleanId)}`;
+    const resp = await HttpClientService.request(
+      http.RequestMethod.GET,
+      cancelUrl,
+      ChaoxingBookingService.buildHeaders(true, indexUrl, false),
+      undefined,
+      12000
     );
-    if (submitResp.statusCode !== 200) {
-      return { ok: false, message: `预约提交失败 (${submitResp.statusCode})`, bookingId: '' };
+    const env = JsonHelpers.parseObject(resp.body);
+    if (resp.statusCode === 200 && env !== undefined && JsonHelpers.bool(env, 'success', false)) {
+      return { ok: true, message: '已取消超星图书馆座位预约', bookingId: cleanId };
     }
-    const env = JsonHelpers.parseObject(submitResp.body);
-    if (env === undefined) {
-      return { ok: false, message: '超星预约返回格式异常，请查看我的预约确认', bookingId: '' };
-    }
-    if (!JsonHelpers.bool(env, 'success', false)) {
-      const errMsg = JsonHelpers.str(
-        env,
-        'msg',
-        JsonHelpers.str(env, 'message', '该座位已被预约或当前不可约')
-      );
-      return { ok: false, message: errMsg, bookingId: '' };
-    }
-    const resData = JsonHelpers.asObject(env['data']);
-    const seatReserve = JsonHelpers.asObject(resData !== undefined ? resData['seatReserve'] : undefined);
-    const reserveId = JsonHelpers.str(seatReserve, 'id', `cx-${Date.now()}`);
-    return {
-      ok: true,
-      message: `实时预约成功：${venue.name} ${area.name} ${seatNum}号（${startTime}-${endTime}）`,
-      bookingId: `cx:${venue.id}:${reserveId}`
-    };
-  }
-
-  private static bytesToHex(bytes: Uint8Array): string {
-    const hexChars = '0123456789abcdef';
-    let out = '';
-    for (let i = 0; i < bytes.length; i++) {
-      const b = bytes[i];
-      out += hexChars.charAt((b >> 4) & 0x0f) + hexChars.charAt(b & 0x0f);
-    }
-    return out;
+    const errMsg = JsonHelpers.str(env, 'msg', JsonHelpers.str(env, 'message', '取消超星预约失败'));
+    return { ok: false, message: errMsg, bookingId: '' };
   }
 
   private static md5Hex(plain: string): string {
-    const encoder = new util.TextEncoder();
-    const bytes = encoder.encodeInto(plain);
-    try {
-      const md = cryptoFramework.createMd('MD5');
-      md.updateSync({ data: bytes });
-      const digest = md.digestSync();
-      return ChaoxingBookingService.bytesToHex(digest.data);
-    } catch (_err) {
-      return ChaoxingBookingService.pureMd5Hex(bytes);
-    }
-  }
-
-  private static pureMd5Hex(input: Uint8Array): string {
-    const k: number[] = [
-      0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
-      0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
-      0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
-      0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
-      0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
-      0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
-      0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
-      0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391
-    ];
-    const s: number[] = [
-      7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
-      5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
-      4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-      6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
-    ];
-
-    const bitLen = input.length * 8;
-    const padLen = ((input.length + 8) >> 6) * 64 + 64;
-    const padded = new Uint8Array(padLen);
-    padded.set(input);
-    padded[input.length] = 0x80;
-    padded[padLen - 8] = bitLen & 0xff;
-    padded[padLen - 7] = (bitLen >>> 8) & 0xff;
-    padded[padLen - 6] = (bitLen >>> 16) & 0xff;
-    padded[padLen - 5] = (bitLen >>> 24) & 0xff;
-    const hiBits = Math.floor(bitLen / 4294967296);
-    padded[padLen - 4] = hiBits & 0xff;
-    padded[padLen - 3] = (hiBits >>> 8) & 0xff;
-    padded[padLen - 2] = (hiBits >>> 16) & 0xff;
-    padded[padLen - 1] = (hiBits >>> 24) & 0xff;
-
-    let a0 = 0x67452301;
-    let b0 = 0xefcdab89;
-    let c0 = 0x98badcfe;
-    let d0 = 0x10325476;
-
-    for (let offset = 0; offset < padLen; offset += 64) {
-      const m: number[] = [];
-      for (let j = 0; j < 16; j++) {
-        const idx = offset + j * 4;
-        m.push(
-          padded[idx] |
-          (padded[idx + 1] << 8) |
-          (padded[idx + 2] << 16) |
-          (padded[idx + 3] << 24)
-        );
-      }
-
-      let a = a0;
-      let b = b0;
-      let c = c0;
-      let d = d0;
-
-      for (let i = 0; i < 64; i++) {
-        let f = 0;
-        let g = 0;
-        if (i < 16) {
-          f = (b & c) | ((~b) & d);
-          g = i;
-        } else if (i < 32) {
-          f = (d & b) | ((~d) & c);
-          g = (5 * i + 1) % 16;
-        } else if (i < 48) {
-          f = b ^ c ^ d;
-          g = (3 * i + 5) % 16;
-        } else {
-          f = c ^ (b | (~d));
-          g = (7 * i) % 16;
-        }
-        const temp = d;
-        d = c;
-        c = b;
-        const sum = (a + f + k[i] + m[g]) | 0;
-        const shift = s[i];
-        const rot = (sum << shift) | (sum >>> (32 - shift));
-        b = (b + rot) | 0;
-        a = temp;
-      }
-
-      a0 = (a0 + a) | 0;
-      b0 = (b0 + b) | 0;
-      c0 = (c0 + c) | 0;
-      d0 = (d0 + d) | 0;
-    }
-
-    const words: number[] = [a0, b0, c0, d0];
-    const out = new Uint8Array(16);
-    for (let i = 0; i < 4; i++) {
-      out[i * 4] = words[i] & 0xff;
-      out[i * 4 + 1] = (words[i] >>> 8) & 0xff;
-      out[i * 4 + 2] = (words[i] >>> 16) & 0xff;
-      out[i * 4 + 3] = (words[i] >>> 24) & 0xff;
-    }
-    return ChaoxingBookingService.bytesToHex(out);
+    return LibraryBookingProtocol.md5HexPure(plain);
   }
 }
